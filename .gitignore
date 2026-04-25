@@ -1,0 +1,7 @@
+config.sh
+*.app/
+data/
+recordings/
+transcripts/
+summaries/
+logs/
