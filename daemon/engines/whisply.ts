@@ -8,30 +8,55 @@ import { join } from "node:path";
 import type { Config } from "../config.ts";
 import type { QueueItem } from "../queue.ts";
 import { log } from "../log.ts";
-import { AbortError, EngineError } from "./errors.ts";
+import { AbortError, EngineError, isAbort } from "./errors.ts";
 
 export async function transcribe(cfg: Config, job: QueueItem, signal: AbortSignal): Promise<string> {
   const scratch = cfg.paths.scratchDir(job.basename);
-  // Clear any stale partials from a previously-aborted run before starting.
+  const localInput = join(scratch, "audio.wav");
+  const wantDiarize = cfg.diarize && !!cfg.hfToken;
+
+  await prepareScratch(scratch, localInput, job.wavPath);
+  try {
+    await runWhisply(cfg, job.basename, localInput, scratch, signal, wantDiarize);
+  } catch (err) {
+    if (isAbort(err) || signal.aborted) throw err;
+    if (wantDiarize) {
+      // Diarization can fail independently of transcription (e.g. gated pyannote
+      // models, MPS issues). Don't lose the transcript over it — retry plain.
+      log.warn("whisply", `${job.basename}: diarized run failed (${(err as Error).message}); retrying without diarization`);
+      await prepareScratch(scratch, localInput, job.wavPath); // whisply may have mutated localInput
+      await runWhisply(cfg, job.basename, localInput, scratch, signal, false);
+    } else {
+      throw err;
+    }
+  }
+  return await locateAndNormalize(cfg, job.basename, scratch);
+}
+
+/** Reset the scratch dir and link the input in under an already-sanitized name.
+ *  whisply renames/sanitizes its -f input file IN PLACE, which would corrupt
+ *  recordings/ and could re-trigger the watcher — so it only ever sees this copy. */
+async function prepareScratch(scratch: string, localInput: string, wavPath: string): Promise<void> {
   await rm(scratch, { recursive: true, force: true });
   await mkdir(scratch, { recursive: true });
-
-  // whisply renames/sanitizes its -f input file IN PLACE (dashes/dots -> underscores),
-  // which would corrupt recordings/ and could re-trigger the watcher. So we never hand
-  // it the original: link the wav into scratch under an already-sanitized name and let
-  // whisply mutate that copy only. Hardlink is instant + same-fs; fall back to a copy.
-  const localInput = join(scratch, "audio.wav");
   try {
-    await link(job.wavPath, localInput);
+    await link(wavPath, localInput); // instant hardlink (same filesystem)
   } catch {
-    await copyFile(job.wavPath, localInput);
+    await copyFile(wavPath, localInput);
   }
+}
 
+async function runWhisply(
+  cfg: Config,
+  label: string,
+  localInput: string,
+  scratch: string,
+  signal: AbortSignal,
+  diarize: boolean,
+): Promise<void> {
   const args = ["run", "-f", localInput, "-o", scratch, "-d", cfg.device, "-m", cfg.whisplyModel, "-l", cfg.language, "-e", "txt"];
-  if (cfg.diarize && cfg.hfToken) {
-    args.push("--annotate", "-hf", cfg.hfToken);
-  }
-  log.info("whisply", `transcribing ${job.basename}${cfg.diarize && cfg.hfToken ? " (diarized)" : ""}`);
+  if (diarize) args.push("--annotate", "-hf", cfg.hfToken);
+  log.info("whisply", `transcribing ${label}${diarize ? " (diarized)" : ""}`);
 
   const proc = Bun.spawn([cfg.whisplyBin, ...args], {
     // whisply computes output paths relative to cwd and crashes if they're outside it,
@@ -63,8 +88,6 @@ export async function transcribe(cfg: Config, job: QueueItem, signal: AbortSigna
     const stderr = await new Response(proc.stderr).text();
     throw new EngineError(`whisply exited ${code}`, code, stderr.slice(-2000));
   }
-
-  return await locateAndNormalize(cfg, job.basename, scratch);
 }
 
 async function locateAndNormalize(cfg: Config, basename: string, scratch: string): Promise<string> {
