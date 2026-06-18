@@ -1,7 +1,8 @@
-// Append pipeline failures to logs/process-failures.log in the same format as
-// scripts/process.sh, including a ready-to-paste re-run command.
+// Append pipeline failures to logs/process-failures.log, including a ready-to-paste
+// re-run command. Keyed by basename (location-independent — the wav has been moved to
+// recordings/failed/, and `murmur process` resolves a basename wherever it sits).
 import { appendFile, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import type { Config } from "./config.ts";
 import { notify } from "./notify.ts";
 import { log } from "./log.ts";
@@ -11,10 +12,10 @@ export async function logFailure(
   basename: string,
   stage: string,
   code: number,
-  wavPath: string,
+  _wavPath: string,
 ): Promise<void> {
   const ts = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
-  const rerun = `${join(cfg.repoDir, "scripts/process.sh")} "${wavPath}"`;
+  const rerun = `murmur process "${basename}"  (wav in recordings/failed/)`;
   const lineText = `[${ts}] ${basename} — ${stage} failed (exit ${code}). Re-run: ${rerun}\n`;
   try {
     await mkdir(dirname(cfg.paths.failureLog), { recursive: true });

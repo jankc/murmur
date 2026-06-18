@@ -18,9 +18,9 @@ export function startWatcher(cfg: Config, onStable: (wav: string) => void): Watc
   void reconcile(cfg, onStable);
 
   const pending = new Map<string, ReturnType<typeof setTimeout>>();
-  const watcher = watch(cfg.paths.recordingsDir, { persistent: true }, (_event, fname) => {
+  const watcher = watch(cfg.paths.inboxDir, { persistent: true }, (_event, fname) => {
     if (!fname || !fname.toString().endsWith(".wav")) return;
-    const full = join(cfg.paths.recordingsDir, fname.toString());
+    const full = join(cfg.paths.inboxDir, fname.toString());
     const existing = pending.get(full);
     if (existing) clearTimeout(existing);
     pending.set(
@@ -28,7 +28,7 @@ export function startWatcher(cfg: Config, onStable: (wav: string) => void): Watc
       setTimeout(() => void debounceStable(full, pending, onStable), 1000),
     );
   });
-  log.info("watcher", `watching ${cfg.paths.recordingsDir}`);
+  log.info("watcher", `watching ${cfg.paths.inboxDir}`);
   return { close: () => watcher.close() };
 }
 
@@ -54,12 +54,14 @@ async function debounceStable(
   onStable(path);
 }
 
+// On boot, scan only inbox/ — processed/ recordings are done by definition (the folder
+// IS the state), so they're never re-examined. This is the whole point of the move model.
 async function reconcile(cfg: Config, onStable: (wav: string) => void): Promise<void> {
   try {
-    const entries = await readdir(cfg.paths.recordingsDir);
+    const entries = await readdir(cfg.paths.inboxDir);
     const wavs = entries.filter((e) => e.endsWith(".wav"));
-    if (wavs.length) log.info("watcher", `reconcile: ${wavs.length} existing recording(s)`);
-    for (const e of wavs) onStable(join(cfg.paths.recordingsDir, e));
+    if (wavs.length) log.info("watcher", `reconcile: ${wavs.length} recording(s) in inbox`);
+    for (const e of wavs) onStable(join(cfg.paths.inboxDir, e));
   } catch (err) {
     log.warn("watcher", `reconcile scan failed: ${String(err)}`);
   }

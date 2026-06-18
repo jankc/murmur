@@ -5,9 +5,12 @@ Local meeting recorder, transcriber, and summarizer for macOS. Records an Aggreg
 One stack: a single [Bun](https://bun.sh)/TypeScript codebase in `src/` provides both the **`murmur` CLI** (manual control) and a long-lived **daemon** (automatic, GPU-pause-aware processing). They share the same modules, so every step has one implementation.
 
 ```
-record (ffmpeg) ─▶ recordings/*.wav ─▶ whisply (mlx + diarize) ─▶ ollama ─▶ summaries/*.md
-                                        └ daemon: watch · serial queue · GPU-pause · auto-defer-while-recording
+record (ffmpeg) ─▶ recordings/inbox/*.wav ─▶ whisply (mlx + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
+                                              └ daemon: watch inbox · serial queue · GPU-pause · auto-defer
+                       on success the wav moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
 ```
+
+**A recording's folder is its state.** New recordings land in `recordings/inbox/`; the daemon watches *only* that folder. When a recording is fully processed (transcribed → summarized → archived) its `.wav` is **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves the `.wav` to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur process` re-run command to `logs/process-failures.log`.
 
 ## Install
 
@@ -59,7 +62,7 @@ Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`r
 
 ## The daemon (automatic processing)
 
-The daemon watches `recordings/` and runs each new `.wav` through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand.
+The daemon watches `recordings/inbox/` and runs each new `.wav` through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand. Done recordings move to `processed/<YYYY-MM>/` (see [folder = state](#murmur) above).
 
 Run it always-on via the LaunchAgent:
 ```sh

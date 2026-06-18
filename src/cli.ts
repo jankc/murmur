@@ -39,15 +39,26 @@ function positional(): string | undefined {
 }
 
 function newestRecording(cfg: Config): string | null {
-  try {
-    const wavs = readdirSync(cfg.paths.recordingsDir)
-      .filter((f) => f.endsWith(".wav"))
-      .map((f) => `${cfg.paths.recordingsDir}/${f}`)
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-    return wavs[0] ?? null;
-  } catch {
-    return null;
+  // Newest pending in inbox/ if any (the usual "process what I just recorded"); else
+  // newest already-processed wav (inbox + processed are searched, recursively).
+  const dirs = [cfg.paths.inboxDir, cfg.paths.processedDir];
+  let best: { path: string; mtime: number } | null = null;
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir, { recursive: true }) as string[];
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (!e.endsWith(".wav")) continue;
+      const p = `${dir}/${e}`;
+      const mtime = statSync(p).mtimeMs;
+      if (!best || mtime > best.mtime) best = { path: p, mtime };
+    }
+    if (best && dir === cfg.paths.inboxDir) break; // prefer a pending recording
   }
+  return best?.path ?? null;
 }
 
 async function runInline(wavPath: string): Promise<{ txt: string; md: string }> {

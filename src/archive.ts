@@ -11,14 +11,9 @@ import { join } from "node:path";
 import type { Config } from "./config.ts";
 import { generateTitle, EMPTY_MARKER } from "./engines/ollama.ts";
 import { isAbort } from "./engines/errors.ts";
+import { parseStamp, stampFromDate } from "./stamp.ts";
+import { locateWav } from "./queue.ts";
 import { log } from "./log.ts";
-
-interface Stamp {
-  date: string; // YYYY-MM-DD
-  time: string; // HH-MM (filename-safe)
-  display: string; // HH:MM (frontmatter)
-  month: string; // YYYY-MM (folder)
-}
 
 export async function archiveSummary(cfg: Config, base: string, signal: AbortSignal): Promise<void> {
   if (!cfg.vaultRoot) return; // archiving disabled
@@ -35,7 +30,8 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
     return;
   }
 
-  const when = parseStamp(base) ?? stampFromMtime(summaryPath);
+  const mtime = (await summaryFile.exists()) ? new Date(summaryFile.lastModified) : new Date();
+  const when = parseStamp(base) ?? stampFromDate(mtime);
   const monthDir = join(cfg.vaultRoot, cfg.vaultFolder, when.month);
   const prefix = `${when.date} ${when.time}`;
 
@@ -73,22 +69,6 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   log.info("archive", `→ ${out}`);
 }
 
-// meeting-2026-06-18_16-21-05 → {date, time, display, month}
-function parseStamp(base: string): Stamp | null {
-  const m = base.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);
-  if (!m) return null;
-  const [, y, mo, d, hh, mm] = m;
-  return { date: `${y}-${mo}-${d}`, time: `${hh}-${mm}`, display: `${hh}:${mm}`, month: `${y}-${mo}` };
-}
-
-function stampFromMtime(path: string): Stamp {
-  const dt = Bun.file(path).lastModified ? new Date(Bun.file(path).lastModified) : new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  const y = dt.getFullYear(), mo = p(dt.getMonth() + 1), d = p(dt.getDate());
-  const hh = p(dt.getHours()), mm = p(dt.getMinutes());
-  return { date: `${y}-${mo}-${d}`, time: `${hh}-${mm}`, display: `${hh}:${mm}`, month: `${y}-${mo}` };
-}
-
 // Strip characters Obsidian/macOS reject in note names; collapse whitespace; cap length.
 function sanitizeTitle(t: string): string {
   return t
@@ -111,8 +91,9 @@ async function countSpeakers(cfg: Config, base: string): Promise<number> {
 
 // Recordings are mono 16 kHz s16le PCM, so duration is exact from file size (44-byte header).
 async function durationOf(cfg: Config, base: string): Promise<string | null> {
-  const f = Bun.file(join(cfg.paths.recordingsDir, `${base}.wav`));
-  if (!(await f.exists())) return null;
+  const wav = await locateWav(cfg, base); // inbox during processing, processed/ afterwards
+  if (!wav) return null;
+  const f = Bun.file(wav);
   const seconds = Math.max(0, (f.size - 44) / 32000);
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
   const s = Math.round(seconds);

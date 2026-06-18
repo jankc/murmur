@@ -14,7 +14,9 @@ import { log } from "./log.ts";
 export async function runDaemon(cfg: Config): Promise<void> {
   // 1. Ensure the directory layout exists.
   for (const dir of [
-    cfg.paths.recordingsDir,
+    cfg.paths.inboxDir,
+    cfg.paths.processedDir,
+    cfg.paths.failedDir,
     cfg.paths.transcriptsDir,
     cfg.paths.summariesDir,
     cfg.paths.logsDir,

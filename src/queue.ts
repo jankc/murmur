@@ -18,15 +18,27 @@ interface QueueFileV1 {
   items: QueueItem[];
 }
 
-/** Resolve a /enqueue argument (full path or bare basename) to an existing .wav path. */
-export async function resolveWav(cfg: Config, input: string): Promise<string | null> {
-  const candidates = isAbsolute(input)
-    ? [input]
-    : [join(process.cwd(), input), join(cfg.paths.recordingsDir, input), join(cfg.paths.recordingsDir, `${input}.wav`)];
-  for (const c of candidates) {
-    if (await Bun.file(c).exists()) return c;
+/** Locate a recording by bare basename, wherever it currently sits in its lifecycle
+ *  (inbox → processed/<month> → failed). Returns the existing path or null. */
+export async function locateWav(cfg: Config, base: string): Promise<string | null> {
+  const inbox = cfg.paths.inboxWav(base);
+  if (await Bun.file(inbox).exists()) return inbox;
+  const failed = cfg.paths.failedWav(base);
+  if (await Bun.file(failed).exists()) return failed;
+  // processed/ is partitioned by month — glob for the basename.
+  const glob = new Bun.Glob(`**/${base}.wav`);
+  for await (const rel of glob.scan({ cwd: cfg.paths.processedDir })) {
+    return join(cfg.paths.processedDir, rel);
   }
   return null;
+}
+
+/** Resolve a /enqueue argument (full path or bare basename) to an existing .wav path. */
+export async function resolveWav(cfg: Config, input: string): Promise<string | null> {
+  if (isAbsolute(input)) return (await Bun.file(input).exists()) ? input : null;
+  const cwd = join(process.cwd(), input);
+  if (await Bun.file(cwd).exists()) return cwd;
+  return locateWav(cfg, pathBasename(input, ".wav"));
 }
 
 export class Queue {

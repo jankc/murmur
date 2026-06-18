@@ -45,9 +45,9 @@ export class FfmpegRecorder implements Recorder {
     if (this.isRecording()) return { ok: false, message: "already recording" };
 
     const ts = stamp(new Date());
-    const outFile = join(this.cfg.paths.recordingsDir, `meeting-${ts}.wav`);
+    const outFile = join(this.cfg.paths.inboxDir, `meeting-${ts}.wav`);
     const logFile = join(this.cfg.paths.logsDir, `meeting-${ts}.log`);
-    mkdirSync(this.cfg.paths.recordingsDir, { recursive: true });
+    mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
     mkdirSync(this.cfg.paths.logsDir, { recursive: true });
 
     const args = [
