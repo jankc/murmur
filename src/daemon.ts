@@ -41,9 +41,14 @@ export async function runDaemon(cfg: Config): Promise<void> {
 
   const server = startControl({ cfg, worker, queue, recorder, pause });
   const watcher = startWatcher(cfg, (wav) => {
-    void queue.enqueue(wav).then((item) => {
-      if (item) worker.notifyChange();
-    });
+    // Fire-and-forget, but never let an enqueue error become an unhandled rejection
+    // (which would crash the daemon) — log it and carry on.
+    queue
+      .enqueue(wav)
+      .then((item) => {
+        if (item) worker.notifyChange();
+      })
+      .catch((err) => log.warn("daemon", `enqueue ${wav} failed: ${String(err)}`));
   });
 
   // 5. Graceful shutdown.
