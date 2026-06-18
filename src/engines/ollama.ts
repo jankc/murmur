@@ -8,15 +8,40 @@ import { AbortError, EngineError, isAbort } from "./errors.ts";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+// Emitted for genuinely empty/trivial recordings. Detection is done in code (word count)
+// rather than left to the model, which over-classifies real rambly speech as "test audio".
+// archive.ts skips notes whose summary contains "prázdný nebo testovací".
+export const EMPTY_MARKER = "Transcript je prázdný nebo testovací — žádné shrnutí.";
+const MIN_WORDS = 25;
+
+// Count real spoken words, ignoring diarization markup ([00:00:01.2], [SPEAKER_00]).
+function wordCount(transcript: string): number {
+  return transcript
+    .replace(/\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]/g, "")
+    .replace(/\[SPEAKER_\d+\]/g, "")
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
 export async function summarize(cfg: Config, transcriptPath: string, signal: AbortSignal): Promise<string> {
+  const base = pathBasename(transcriptPath, ".txt");
+  const transcript = await Bun.file(transcriptPath).text();
+
+  // Trivially short → mark empty without spending an LLM call (or risking misclassification).
+  if (wordCount(transcript) < MIN_WORDS) {
+    log.info("ollama", `transcript ${base} below ${MIN_WORDS} words — marking empty (skipping LLM)`);
+    const out = cfg.paths.summary(base);
+    await Bun.write(out, EMPTY_MARKER + "\n");
+    return out;
+  }
+
   await preflight(cfg, signal);
 
-  const base = pathBasename(transcriptPath, ".txt");
   const prompt = [
     await Bun.file(cfg.promptFile).text(),
     "",
     "--- TRANSCRIPT ---",
-    await Bun.file(transcriptPath).text(),
+    transcript,
     "",
     "--- END ---",
     "",

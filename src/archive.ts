@@ -9,7 +9,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
-import { generateTitle } from "./engines/ollama.ts";
+import { generateTitle, EMPTY_MARKER } from "./engines/ollama.ts";
 import { isAbort } from "./engines/errors.ts";
 import { log } from "./log.ts";
 
@@ -26,6 +26,15 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   const summaryFile = Bun.file(summaryPath);
   if (!(await summaryFile.exists())) return;
 
+  const summaryText = await summaryFile.text();
+  // Don't clutter the vault with empty/test recordings (summarize() marks these with
+  // EMPTY_MARKER). Skip them and the title LLM call. Substring match stays robust if the
+  // model ever emits the marker itself rather than our code path writing it.
+  if (summaryText.includes(EMPTY_MARKER) || summaryText.toLowerCase().includes("prázdný nebo testovací")) {
+    log.info("archive", `skip ${base} — empty/test recording`);
+    return;
+  }
+
   const when = parseStamp(base) ?? stampFromMtime(summaryPath);
   const monthDir = join(cfg.vaultRoot, cfg.vaultFolder, when.month);
   const prefix = `${when.date} ${when.time}`;
@@ -33,8 +42,6 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   if (existsSync(monthDir) && readdirSync(monthDir).some((f) => f.startsWith(prefix) && f.endsWith(".md"))) {
     return; // already archived
   }
-
-  const summaryText = await summaryFile.text();
   let title = "";
   try {
     title = sanitizeTitle(await generateTitle(cfg, summaryText, signal));
