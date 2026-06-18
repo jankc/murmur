@@ -40,7 +40,7 @@ export class ScriptRecorder implements Recorder {
 
   async start(): Promise<{ ok: boolean; message: string }> {
     if (this.isRecording()) return { ok: false, message: "already recording" };
-    const code = await this.runScript(this.cfg.recordScript);
+    const code = await this.runScript(this.cfg.recordScript, [this.cfg.recordDeviceIndex]);
     const ok = code === 0;
     if (!ok) log.error("recorder", `record-meeting.sh exited ${code}`);
     return { ok, message: ok ? "recording started" : `record script exited ${code}` };
@@ -54,8 +54,8 @@ export class ScriptRecorder implements Recorder {
     return { ok, message: ok ? "recording stopped" : `stop script exited ${code}` };
   }
 
-  private async runScript(script: string): Promise<number> {
-    const proc = Bun.spawn(["bash", script], {
+  private async runScript(script: string, args: string[] = []): Promise<number> {
+    const proc = Bun.spawn(["bash", script, ...args], {
       cwd: this.cfg.repoDir,
       env: { ...process.env, PATH: this.cfg.childPath },
       stdout: "pipe",

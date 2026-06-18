@@ -23,6 +23,9 @@ export MODEL_SUMMARY="qwen3.6:27b-mlx"
 #   [ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
 
 # --- Recording (optional) ---
+# avfoundation index of your Aggregate Device, used when the daemon/SwiftBar start
+# recording. Find it with: ffmpeg -f avfoundation -list_devices true -i ""
+# export RECORD_DEVICE_INDEX=0
 # export MAX_DURATION_SECONDS=7200             # 2h hard cap
 
 # --- Auto-record (v2, not yet implemented) ---

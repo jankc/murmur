@@ -24,6 +24,7 @@ export interface Config {
   // recording (reuse existing bash scripts)
   recordScript: string;
   stopScript: string;
+  recordDeviceIndex: string;
   // PATH handed to spawned children so ffmpeg/whisply/ollama/terminal-notifier resolve.
   childPath: string;
 }
@@ -45,6 +46,7 @@ const KEYS = [
   "OLLAMA_HOST",
   "PROMPT_FILE",
   "MEETING_AI_CLEAN_SCRATCH",
+  "RECORD_DEVICE_INDEX",
 ] as const;
 
 type RawEnv = Partial<Record<(typeof KEYS)[number], string>>;
@@ -109,6 +111,7 @@ export function loadConfig(): Config {
     promptFile: pick("PROMPT_FILE", join(REPO_DIR, "prompts/summary.md")),
     recordScript: join(REPO_DIR, "scripts/record-meeting.sh"),
     stopScript: join(REPO_DIR, "scripts/stop-meeting.sh"),
+    recordDeviceIndex: pick("RECORD_DEVICE_INDEX", "0"),
     childPath: buildChildPath(whisplyBin),
   };
 

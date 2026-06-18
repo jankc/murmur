@@ -150,5 +150,6 @@ Or use the SwiftBar menu.
 - The `pan=` filter in `record-meeting.sh` is tuned for a specific Aggregate Device channel layout; adjust if your mic/system channels differ.
 - Processing is idempotent. The daemon (and `process.sh`) skip transcription if `transcripts/<base>.txt` exists and summarization if `summaries/<base>.md` exists; a job stays queued until both succeed, so a crash mid-job replays cleanly.
 - whisply writes a nested layout under its output dir; the daemon runs it into `transcripts/.whisply-work/<base>/` and normalizes the result to the flat `transcripts/<base>.txt` the rest of the pipeline expects.
+- When the daemon or SwiftBar starts a recording it uses `RECORD_DEVICE_INDEX` (default `0`) as the `avfoundation` index of your Aggregate Device — set it in `config.sh` if yours isn't 0. The manual `record-meeting.sh [index]` takes the index as an argument instead.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `daemon.lock`) — inspectable and persistent across restarts.
 - The daemon LaunchAgent's `EnvironmentVariables.PATH` must resolve `bun`, `whisply`, `ffmpeg`, `ollama`, and `terminal-notifier`. If you're on Intel Homebrew, a non-default prefix, or reinstall bun, edit the plist accordingly.

@@ -90,6 +90,7 @@ async function selfCheck(): Promise<void> {
   log.info("main", `whisply: ${cfg.whisplyBin} (${(await Bun.file(cfg.whisplyBin).exists()) ? "found" : "MISSING"})`);
   log.info("main", `whisply model=${cfg.whisplyModel} lang=${cfg.language} device=${cfg.device} diarize=${cfg.diarize && !!cfg.hfToken}`);
   log.info("main", `ollama: ${cfg.ollamaHost} model=${cfg.modelSummary}`);
+  log.info("main", `recorder device index=${cfg.recordDeviceIndex}`);
   const ollamaUp = await fetch(`${cfg.ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) })
     .then((r) => r.ok)
     .catch(() => false);
