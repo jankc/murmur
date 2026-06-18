@@ -1,0 +1,14 @@
+{
+  "name": "meeting-ai-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Bun orchestrator daemon for meeting-ai: watches recordings, runs a serial GPU-aware transcribe+summarize queue, exposes a localhost control API.",
+  "scripts": {
+    "start": "bun run main.ts",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

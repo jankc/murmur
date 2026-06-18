@@ -5,3 +5,5 @@ recordings/
 transcripts/
 summaries/
 logs/
+node_modules/
+.DS_Store

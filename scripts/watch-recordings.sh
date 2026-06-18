@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# DEPRECATED: superseded by the Bun daemon (daemon/main.ts), which adds a persistent
+# queue, GPU-pause, auto-defer-while-recording, and whisply transcription. Do NOT run
+# this and the daemon at the same time (they would double-process). See README → Daemon.
+echo "WARNING: watch-recordings.sh is deprecated — use the meeting-ai daemon instead." >&2
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/../config.sh"
 

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Copy to config.sh (gitignored) and edit. Only MEETINGS_BASE + MODEL_SUMMARY are
+# required; everything else has sane defaults baked into daemon/config.ts.
+
+export MEETINGS_BASE="$HOME/Recordings/Meetings"
+export MODEL_SUMMARY="qwen3.6:27b-mlx"
+
+# --- Daemon / whisply (optional) ---
+# export MEETING_AI_PORT=7461                  # localhost control API port
+# export WHISPLY_BIN="$HOME/.local/bin/whisply"
+# export WHISPLY_MODEL="large-v3-turbo"
+# export WHISPLY_LANG="cs"                     # keep set so output filenames are deterministic
+# export WHISPLY_DEVICE="mlx"                  # mlx | gpu | cpu | auto
+
+# --- Diarization (optional, OFF by default) ---
+# Requires a HuggingFace token AND accepting the pyannote model terms:
+#   https://huggingface.co/pyannote/segmentation-3.0
+#   https://huggingface.co/pyannote/speaker-diarization-3.1
+# export DIARIZE=1
+# export HF_TOKEN="hf_xxx"
+
+# --- Inline fallback transcription engine (scripts/transcribe.sh, daemon-down only) ---
+# export MODEL_WHISPER="mlx-community/whisper-large-v3-turbo"
+
+# --- Recording (optional) ---
+# export MAX_DURATION_SECONDS=7200             # 2h hard cap
+
+# --- Auto-record (v2, not yet implemented) ---
+# export AUTORECORD=0
+# export MEETING_APPS="zoom.us,Microsoft Teams,Google Chrome"

@@ -1,0 +1,147 @@
+// The serial GPU worker — exactly one transcribe+summarize job at a time.
+// Honors soft/hard pause, auto-defers while a recording is in progress, is
+// idempotent (skips already-produced transcript/summary), and uses peek-then-commit
+// so a crash mid-job replays cleanly on restart.
+import { join } from "node:path";
+import type { Config } from "./config.ts";
+import type { Queue, QueueItem } from "./queue.ts";
+import type { Recorder } from "./recorder.ts";
+import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
+import { transcribe } from "./engines/whisply.ts";
+import { summarize } from "./engines/ollama.ts";
+import { EngineError, isAbort } from "./engines/errors.ts";
+import { logFailure } from "./failures.ts";
+import { notify } from "./notify.ts";
+import { log } from "./log.ts";
+
+const IDLE_POLL_MS = 5000;
+
+export class Worker {
+  private running = false;
+  private current: { ac: AbortController; job: QueueItem } | null = null;
+  private wakeResolve: (() => void) | null = null;
+
+  constructor(
+    private cfg: Config,
+    private queue: Queue,
+    private recorder: Recorder,
+    private pause: PauseStore,
+  ) {}
+
+  /** Wake the idle loop immediately (called when queue/pause/recording state changes). */
+  notifyChange(): void {
+    this.wakeResolve?.();
+  }
+
+  private wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.wakeResolve = null;
+        resolve();
+      }, ms);
+      this.wakeResolve = () => {
+        clearTimeout(timer);
+        this.wakeResolve = null;
+        resolve();
+      };
+    });
+  }
+
+  async loop(): Promise<void> {
+    this.running = true;
+    await this.recover();
+    log.info("worker", "loop started");
+    while (this.running) {
+      const blocked = this.pause.isPaused() || this.recorder.isRecording() || this.queue.size() === 0;
+      if (blocked) {
+        await this.wait(IDLE_POLL_MS);
+        continue;
+      }
+      const job = this.queue.peek();
+      if (!job) continue;
+      await this.runOne(job);
+    }
+    log.info("worker", "loop stopped");
+  }
+
+  /** On startup, clear any stale current-job marker; the job itself is still queued
+   *  (peek-then-commit) and will be retried, with idempotency skipping done stages. */
+  private async recover(): Promise<void> {
+    const cur = await readCurrent(this.cfg);
+    if (cur) {
+      log.info("worker", `recovering interrupted job ${cur.basename} (was at stage ${cur.stage})`);
+      await clearCurrent(this.cfg);
+    }
+  }
+
+  private async runOne(job: QueueItem): Promise<void> {
+    const ac = new AbortController();
+    this.current = { ac, job };
+    try {
+      const txt = this.cfg.paths.transcript(job.basename);
+      await writeCurrent(this.cfg, { basename: job.basename, stage: "transcribe", startedAt: Date.now() });
+      if (await Bun.file(txt).exists()) {
+        log.info("worker", `transcript exists, skipping transcription: ${job.basename}`);
+      } else {
+        await transcribe(this.cfg, job, ac.signal);
+      }
+
+      await writeCurrent(this.cfg, { basename: job.basename, stage: "summarize", startedAt: Date.now() });
+      if (await Bun.file(this.cfg.paths.summary(job.basename)).exists()) {
+        log.info("worker", `summary exists, skipping summarization: ${job.basename}`);
+      } else {
+        await summarize(this.cfg, txt, ac.signal);
+      }
+
+      await this.queue.commitDequeue(job.basename);
+      await clearCurrent(this.cfg);
+      log.info("worker", `completed ${job.basename}`);
+      notify(this.cfg, `Summary ready: ${job.basename}`);
+    } catch (err) {
+      if (isAbort(err) || ac.signal.aborted) {
+        await this.queue.requeueFront(job.basename, job.wavPath);
+        await clearCurrent(this.cfg);
+        log.warn("worker", `aborted ${job.basename} (hard pause) — requeued`);
+      } else {
+        const stage = (await readCurrent(this.cfg))?.stage ?? "process";
+        const code = err instanceof EngineError ? err.exitCode : 1;
+        if (err instanceof EngineError && err.detail) log.error("worker", `${job.basename} stderr: ${err.detail}`);
+        await logFailure(this.cfg, job.basename, stage, code, job.wavPath);
+        await this.queue.commitDequeue(job.basename); // drop poison job; logged for manual re-run
+        await clearCurrent(this.cfg);
+      }
+    } finally {
+      this.current = null;
+    }
+  }
+
+  currentBasename(): string | null {
+    return this.current?.job.basename ?? null;
+  }
+
+  async softPause(): Promise<void> {
+    await this.pause.set("soft");
+    this.notifyChange();
+    log.info("worker", "soft pause (will finish current job, then idle)");
+  }
+
+  async hardPause(): Promise<void> {
+    await this.pause.set("hard");
+    this.current?.ac.abort();
+    this.notifyChange();
+    log.info("worker", "hard pause (aborting current job)");
+  }
+
+  async resume(): Promise<void> {
+    await this.pause.set("none");
+    this.notifyChange();
+    log.info("worker", "resumed");
+  }
+
+  /** Graceful shutdown: stop the loop and abort any in-flight child. */
+  shutdown(): void {
+    this.running = false;
+    this.current?.ac.abort();
+    this.notifyChange();
+  }
+}
