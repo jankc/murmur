@@ -1,7 +1,7 @@
 // Persistent FIFO job queue, mirrored to state/queue.json on every mutation.
 // The worker uses peek()-then-commitDequeue() so a job is only removed once both
 // pipeline stages succeed — a crash mid-job leaves it at the head for replay.
-import { basename as pathBasename, join, isAbsolute } from "node:path";
+import { basename as pathBasename } from "node:path";
 import type { Config } from "./config.ts";
 import { readJson, writeJsonAtomic } from "./state.ts";
 import { log } from "./log.ts";
@@ -18,31 +18,15 @@ interface QueueFileV1 {
   items: QueueItem[];
 }
 
-/** Locate a recording by bare basename, wherever it currently sits in its lifecycle
- *  (inbox → processed/<month> → failed). Returns the existing path or null. */
-export async function locateWav(cfg: Config, base: string): Promise<string | null> {
-  const inbox = cfg.paths.inboxWav(base);
-  if (await Bun.file(inbox).exists()) return inbox;
-  const failed = cfg.paths.failedWav(base);
-  if (await Bun.file(failed).exists()) return failed;
-  // processed/ is partitioned by month — glob for the basename.
-  const glob = new Bun.Glob(`**/${base}.wav`);
-  for await (const rel of glob.scan({ cwd: cfg.paths.processedDir })) {
-    return join(cfg.paths.processedDir, rel);
-  }
-  return null;
-}
-
-/** Resolve a /enqueue argument (full path or bare basename) to an existing .wav path. */
-export async function resolveWav(cfg: Config, input: string): Promise<string | null> {
-  if (isAbsolute(input)) return (await Bun.file(input).exists()) ? input : null;
-  const cwd = join(process.cwd(), input);
-  if (await Bun.file(cwd).exists()) return cwd;
-  return locateWav(cfg, pathBasename(input, ".wav"));
-}
+// Locating a recording and resolving a wav argument now live in recordings.ts (the
+// single owner of the folder-as-state lifecycle). They're re-exported there.
 
 export class Queue {
   private items: QueueItem[];
+  // Basenames currently mid-enqueue. Guards the window between the dedup check and the
+  // async `summary exists?` await, so two near-simultaneous watcher events for the same
+  // recording can't both pass the check and double-push.
+  private enqueuing = new Set<string>();
 
   private constructor(private cfg: Config, items: QueueItem[]) {
     this.items = items;
@@ -75,16 +59,21 @@ export class Queue {
    */
   async enqueue(wavPath: string, opts: { force?: boolean } = {}): Promise<QueueItem | null> {
     const base = pathBasename(wavPath, ".wav");
-    if (this.items.some((i) => i.basename === base)) return null;
-    if (!opts.force && (await Bun.file(this.cfg.paths.summary(base)).exists())) {
-      log.info("queue", `skip ${base} (summary already exists)`);
-      return null;
+    if (this.items.some((i) => i.basename === base) || this.enqueuing.has(base)) return null;
+    this.enqueuing.add(base);
+    try {
+      if (!opts.force && (await Bun.file(this.cfg.paths.summary(base)).exists())) {
+        log.info("queue", `skip ${base} (summary already exists)`);
+        return null;
+      }
+      const item: QueueItem = { basename: base, wavPath, enqueuedAt: Date.now(), attempts: 0 };
+      this.items.push(item);
+      await this.persist();
+      log.info("queue", `enqueued ${base} (depth ${this.items.length})`);
+      return item;
+    } finally {
+      this.enqueuing.delete(base);
     }
-    const item: QueueItem = { basename: base, wavPath, enqueuedAt: Date.now(), attempts: 0 };
-    this.items.push(item);
-    await this.persist();
-    log.info("queue", `enqueued ${base} (depth ${this.items.length})`);
-    return item;
   }
 
   /** Remove a job after it completes (or after a non-retryable failure). */

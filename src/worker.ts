@@ -2,12 +2,9 @@
 // Honors soft/hard pause, auto-defers while a recording is in progress, is
 // idempotent (skips already-produced transcript/summary), and uses peek-then-commit
 // so a crash mid-job replays cleanly on restart.
-import { dirname } from "node:path";
-import { existsSync, statSync } from "node:fs";
-import { mkdir, rename } from "node:fs/promises";
 import type { Config } from "./config.ts";
 import type { Queue, QueueItem } from "./queue.ts";
-import { monthOf } from "./stamp.ts";
+import { move } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
 import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
 import { transcribe } from "./engines/whisply.ts";
@@ -62,7 +59,10 @@ export class Worker {
         continue;
       }
       const job = this.queue.peek();
-      if (!job) continue;
+      if (!job) {
+        await this.wait(IDLE_POLL_MS); // defensive: don't busy-spin if the head is gone
+        continue;
+      }
       await this.runOne(job);
     }
     log.info("worker", "loop stopped");
@@ -109,7 +109,7 @@ export class Worker {
 
       // Done: the wav's home is now processed/<month>/ — that move IS the "processed"
       // signal (the watcher never looks outside inbox/ again).
-      await this.moveWav(job, "processed");
+      await move(this.cfg, job.basename, "processed");
       await this.queue.commitDequeue(job.basename);
       await clearCurrent(this.cfg);
       log.info("worker", `completed ${job.basename}`);
@@ -125,31 +125,12 @@ export class Worker {
         if (err instanceof EngineError && err.detail) log.error("worker", `${job.basename} stderr: ${err.detail}`);
         await logFailure(this.cfg, job.basename, stage, code, job.wavPath);
         // Move out of inbox/ so a poison recording doesn't get re-enqueued every restart.
-        await this.moveWav(job, "failed");
+        await move(this.cfg, job.basename, "failed");
         await this.queue.commitDequeue(job.basename);
         await clearCurrent(this.cfg);
       }
     } finally {
       this.current = null;
-    }
-  }
-
-  /** Move the recording to its terminal folder (location = state). Best-effort: a move
-   *  failure is logged but never turns a successful job into a failed one. */
-  private async moveWav(job: QueueItem, to: "processed" | "failed"): Promise<void> {
-    try {
-      const src = job.wavPath;
-      if (!existsSync(src)) return; // already moved, or recorded elsewhere
-      const dest =
-        to === "processed"
-          ? this.cfg.paths.processedWav(job.basename, monthOf(job.basename, statSync(src).mtime))
-          : this.cfg.paths.failedWav(job.basename);
-      if (src === dest) return;
-      await mkdir(dirname(dest), { recursive: true });
-      await rename(src, dest);
-      log.info("worker", `moved ${job.basename} → ${to}`);
-    } catch (err) {
-      log.warn("worker", `could not move ${job.basename} → ${to}: ${String(err)}`);
     }
   }
 

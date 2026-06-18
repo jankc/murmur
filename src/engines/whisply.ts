@@ -4,6 +4,7 @@
 // so we run it into a per-job scratch dir, then locate + normalize the produced txt
 // to the flat transcripts/<base>.txt path that summarize.sh + idempotency expect.
 import { mkdir, rm, link, copyFile } from "node:fs/promises";
+import { openSync, closeSync, readFileSync, writeSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../config.ts";
 import type { QueueItem } from "../queue.ts";
@@ -58,13 +59,22 @@ async function runWhisply(
   if (diarize) args.push("--annotate", "-hf", cfg.hfToken);
   log.info("whisply", `transcribing ${label}${diarize ? " (diarized)" : ""}`);
 
+  // Redirect whisply's stdout+stderr straight to a per-job log file (like the recorder
+  // does for ffmpeg). Piping without draining risks the child blocking on a full pipe
+  // buffer — a hung job — and discards diagnostics on success; a log fd avoids both.
+  const logPath = join(cfg.paths.logsDir, `whisply-${label}.log`);
+  mkdirSync(cfg.paths.logsDir, { recursive: true });
+  const logFd = openSync(logPath, "a");
+  writeSync(logFd, `\n=== whisply ${label}${diarize ? " (diarized)" : ""} ===\n`);
+
   const proc = Bun.spawn([cfg.whisplyBin, ...args], {
     // whisply computes output paths relative to cwd and crashes if they're outside it,
     // so run it from $MEETINGS_BASE (which contains both the input wav and the scratch dir).
     cwd: cfg.meetingsBase,
     env: { ...process.env, PATH: cfg.childPath },
-    stdout: "pipe",
-    stderr: "pipe",
+    stdin: "ignore",
+    stdout: logFd,
+    stderr: logFd,
   });
 
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -81,12 +91,21 @@ async function runWhisply(
   } finally {
     if (killTimer) clearTimeout(killTimer);
     signal.removeEventListener("abort", onAbort);
+    try { closeSync(logFd); } catch {}
   }
 
   if (signal.aborted) throw new AbortError("whisply aborted");
   if (code !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new EngineError(`whisply exited ${code}`, code, stderr.slice(-2000));
+    throw new EngineError(`whisply exited ${code} (see ${logPath})`, code, tail(logPath, 2000));
+  }
+}
+
+/** Last `n` characters of a file, for surfacing an engine's error tail. */
+function tail(path: string, n: number): string {
+  try {
+    return readFileSync(path, "utf8").slice(-n);
+  } catch {
+    return "";
   }
 }
 

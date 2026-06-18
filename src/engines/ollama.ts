@@ -3,10 +3,9 @@
 // app + wait if down), prepend prompts/summary.md, write summaries/<base>.md.
 import { basename as pathBasename } from "node:path";
 import type { Config } from "../config.ts";
+import { sleep } from "../util.ts";
 import { log } from "../log.ts";
 import { AbortError, EngineError, isAbort } from "./errors.ts";
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // Emitted for genuinely empty/trivial recordings. Detection is done in code (word count)
 // rather than left to the model, which over-classifies real rambly speech as "test audio".
@@ -15,7 +14,7 @@ export const EMPTY_MARKER = "Transcript je prázdný nebo testovací — žádn�
 const MIN_WORDS = 25;
 
 // Count real spoken words, ignoring diarization markup ([00:00:01.2], [SPEAKER_00]).
-function wordCount(transcript: string): number {
+export function wordCount(transcript: string): number {
   return transcript
     .replace(/\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]/g, "")
     .replace(/\[SPEAKER_\d+\]/g, "")

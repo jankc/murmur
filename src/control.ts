@@ -2,10 +2,11 @@
 // drive the daemon through this. No auth — single-user macOS, bound to 127.0.0.1.
 import type { Config } from "./config.ts";
 import type { Worker } from "./worker.ts";
-import { Queue, resolveWav } from "./queue.ts";
+import { Queue } from "./queue.ts";
+import { resolveWav } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
 import type { PauseStore } from "./jobstate.ts";
-import { readCurrent } from "./jobstate.ts";
+import { statusSnapshot } from "./status.ts";
 import { log } from "./log.ts";
 
 interface Deps {
@@ -39,14 +40,7 @@ export function startControl(deps: Deps): ReturnType<typeof Bun.serve> {
 
       switch (route) {
         case "GET /status": {
-          return json({
-            recording: recorder.isRecording(),
-            recordingFile: recorder.currentFile(),
-            pause: pause.mode(),
-            queueDepth: queue.size(),
-            queue: queue.list().map((i) => i.basename),
-            current: (await readCurrent(cfg)) ?? null,
-          });
+          return json(await statusSnapshot(cfg, recorder, pause, queue.list()));
         }
         case "POST /record/start": {
           const r = await recorder.start();

@@ -2,6 +2,7 @@
 // and layering daemon-specific defaults on top. Produces one frozen, typed Config.
 import { join, dirname, delimiter } from "node:path";
 import { buildPaths, type Paths } from "./paths.ts";
+import { truthy, parseNum } from "./util.ts";
 import { log } from "./log.ts";
 
 export interface Config {
@@ -97,13 +98,19 @@ export function loadConfig(): Config {
   const home = process.env.HOME ?? "";
   const meetingsBase = pick("MEETINGS_BASE", join(home, "Recordings/Meetings"));
   const whisplyBin = pick("WHISPLY_BIN", join(home, ".local/bin/whisply"));
-  const truthy = (v: string) => v === "1" || v.toLowerCase() === "true";
+  // Numeric config with a guard: a non-numeric value falls back (with a warning) rather
+  // than silently becoming NaN (which would, e.g., break the control-API port bind).
+  const num = (key: (typeof KEYS)[number], fallback: number): number => {
+    const raw = pick(key, String(fallback));
+    if (!Number.isFinite(Number(raw))) log.warn("config", `${key}="${raw}" is not a number — using ${fallback}`);
+    return parseNum(raw, fallback);
+  };
 
   const cfg: Config = {
     repoDir: REPO_DIR,
     meetingsBase,
     paths: buildPaths(meetingsBase),
-    port: Number(pick("MEETING_AI_PORT", "7461")),
+    port: num("MEETING_AI_PORT", 7461),
     whisplyBin,
     whisplyModel: pick("WHISPLY_MODEL", "large-v3-turbo"),
     language: pick("WHISPLY_LANG", "cs"),
@@ -117,7 +124,7 @@ export function loadConfig(): Config {
     vaultRoot: pick("OBSIDIAN_VAULT", ""),
     vaultFolder: pick("VAULT_FOLDER", "Murmur"),
     recordDeviceIndex: pick("RECORD_DEVICE_INDEX", "0"),
-    maxDurationSeconds: Number(pick("MAX_DURATION_SECONDS", "7200")),
+    maxDurationSeconds: num("MAX_DURATION_SECONDS", 7200),
     childPath: buildChildPath(whisplyBin),
   };
 

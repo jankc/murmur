@@ -12,7 +12,7 @@ import type { Config } from "./config.ts";
 import { generateTitle, EMPTY_MARKER } from "./engines/ollama.ts";
 import { isAbort } from "./engines/errors.ts";
 import { parseStamp, stampFromDate } from "./stamp.ts";
-import { locateWav } from "./queue.ts";
+import { locate } from "./recordings.ts";
 import { log } from "./log.ts";
 
 export async function archiveSummary(cfg: Config, base: string, signal: AbortSignal): Promise<void> {
@@ -30,20 +30,25 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
     return;
   }
 
-  const mtime = (await summaryFile.exists()) ? new Date(summaryFile.lastModified) : new Date();
-  const when = parseStamp(base) ?? stampFromDate(mtime);
+  // summaryFile is guaranteed to exist here (early-returned above otherwise).
+  const when = parseStamp(base) ?? stampFromDate(new Date(summaryFile.lastModified));
   const monthDir = join(cfg.vaultRoot, cfg.vaultFolder, when.month);
   const prefix = `${when.date} ${when.time}`;
 
   if (existsSync(monthDir) && readdirSync(monthDir).some((f) => f.startsWith(prefix) && f.endsWith(".md"))) {
     return; // already archived
   }
-  let title = "";
-  try {
-    title = sanitizeTitle(await generateTitle(cfg, summaryText, signal));
-  } catch (err) {
-    if (isAbort(err) || signal.aborted) throw err;
-    log.warn("archive", `title generation failed for ${base}: ${String(err)}`);
+  // The summary already opens with an LLM-generated title (see prompts/summary.md), so read
+  // it straight from the text — no second model round-trip. Older summaries that predate the
+  // title-in-prompt have no leading title and fall back to a dedicated generateTitle() call.
+  let title = sanitizeTitle(titleFromSummary(summaryText));
+  if (!title) {
+    try {
+      title = sanitizeTitle(await generateTitle(cfg, summaryText, signal));
+    } catch (err) {
+      if (isAbort(err) || signal.aborted) throw err;
+      log.warn("archive", `title generation failed for ${base}: ${String(err)}`);
+    }
   }
 
   const speakers = await countSpeakers(cfg, base);
@@ -69,8 +74,26 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   log.info("archive", `→ ${out}`);
 }
 
+// Headings the summary template itself uses — so the first section of a title-less
+// (older) summary is never mistaken for the meeting title.
+const SECTION_HEADINGS = new Set([
+  "Shrnutí", "Hlavní body", "Rozhodnutí", "Úkoly", "Otevřené otázky",
+  "Technické poznámky", "Technická rozhodnutí", "Rizika / problémy", "Confidence",
+]);
+
+/** Pull the meeting title back out of a summary that opens with `# <title>` (the format
+ *  the summary prompt now produces). Returns "" if the first heading is a section heading
+ *  (an older, title-less summary) or there's no leading heading at all. */
+export function titleFromSummary(text: string): string {
+  const firstLine = text.split("\n").find((l) => l.trim() !== "")?.trim() ?? "";
+  const m = firstLine.match(/^#\s+(.+)$/);
+  if (!m) return "";
+  const t = m[1]!.trim();
+  return SECTION_HEADINGS.has(t) ? "" : t;
+}
+
 // Strip characters Obsidian/macOS reject in note names; collapse whitespace; cap length.
-function sanitizeTitle(t: string): string {
+export function sanitizeTitle(t: string): string {
   return t
     .replace(/[\\/:*?"<>|#^[\]]+/g, " ")
     .replace(/\s+/g, " ")
@@ -91,7 +114,7 @@ async function countSpeakers(cfg: Config, base: string): Promise<number> {
 
 // Recordings are mono 16 kHz s16le PCM, so duration is exact from file size (44-byte header).
 async function durationOf(cfg: Config, base: string): Promise<string | null> {
-  const wav = await locateWav(cfg, base); // inbox during processing, processed/ afterwards
+  const wav = await locate(cfg, base); // inbox during processing, processed/ afterwards
   if (!wav) return null;
   const f = Bun.file(wav);
   const seconds = Math.max(0, (f.size - 44) / 32000);

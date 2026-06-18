@@ -2,19 +2,13 @@
 // so it works whether or not the daemon is running. Menu actions invoke the murmur CLI
 // itself (`bun run cli.ts <cmd>`), which routes to the daemon when up, else acts directly.
 import type { Config } from "./config.ts";
-import { FfmpegRecorder } from "./recorder.ts";
-import { PauseStore, readCurrent } from "./jobstate.ts";
-import { readJson } from "./state.ts";
-import type { QueueItem } from "./queue.ts";
+import { offlineSnapshot } from "./status.ts";
 
 export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Promise<string> {
-  const recorder = new FfmpegRecorder(cfg);
-  const pause = await PauseStore.load(cfg);
-  const queue = await readJson<{ items: QueueItem[] }>(cfg.paths.queueFile, { items: [] });
-
-  const recording = recorder.isRecording();
-  const paused = pause.isPaused();
-  const depth = queue.items.length;
+  const s = await offlineSnapshot(cfg); // same on-disk state the daemon reports
+  const recording = s.recording;
+  const paused = s.pause !== "none";
+  const depth = s.queueDepth;
 
   // SwiftBar runs `bash=<bin>` with paramN as argv; values must contain no spaces.
   const action = (label: string, ...cmd: string[]): string => {
@@ -26,17 +20,15 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
   const lines: string[] = [depth > 0 ? `${title} ${depth}` : title, "---"];
 
   if (recording) {
-    const f = recorder.currentFile();
-    if (f) lines.push(`Recording: ${f.split("/").pop()} | color=red`);
+    if (s.recordingFile) lines.push(`Recording: ${s.recordingFile.split("/").pop()} | color=red`);
     lines.push(action("Stop recording", "stop"));
   } else {
     lines.push(action("Start recording", "record"));
   }
 
-  const current = await readCurrent(cfg);
-  lines.push(current ? `Processing: ${current.basename} (${current.stage})` : `Queue: ${depth}`);
+  lines.push(s.current ? `Processing: ${s.current.basename} (${s.current.stage})` : `Queue: ${depth}`);
   if (paused) {
-    lines.push(`Processing paused (${pause.mode()}) | color=orange`);
+    lines.push(`Processing paused (${s.pause}) | color=orange`);
     lines.push(action("Resume processing", "resume"));
   } else {
     lines.push(action("Pause (soft — finish current)", "pause"));

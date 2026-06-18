@@ -1,7 +1,8 @@
 // Recording: spawn ffmpeg directly against the Aggregate Device (mic + system audio),
 // downmixed to mono 16 kHz PCM. Replaces the old record-meeting.sh / stop-meeting.sh.
-// State lives in the same files those scripts used (recording.pid, current-recording.txt,
-// recording-started-at.txt) so isRecording() works regardless of who started it.
+// State lives in recording.pid + current-recording.txt so isRecording()/currentFile()
+// work regardless of who started the recording; both are cleared the moment a recording
+// ends (via clearRecordingState).
 //
 // ffmpeg writes into recordings/.partial/ (NOT the watched inbox/) so an in-progress
 // recording never triggers the watcher or pollutes inbox. The finished .wav is moved
@@ -12,6 +13,8 @@
 import { existsSync, readFileSync, openSync, mkdirSync, rmSync, writeFileSync, readdirSync, renameSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { Config } from "./config.ts";
+import { notify } from "./notify.ts";
+import { sleep } from "./util.ts";
 import { log } from "./log.ts";
 
 // Tuned for the specific Aggregate Device channel layout (mic on c0/c1, system on c2).
@@ -81,8 +84,7 @@ export class FfmpegRecorder implements Recorder {
 
     writeFileSync(this.cfg.paths.recordingPid, String(proc.pid));
     writeFileSync(this.cfg.paths.currentRecordingTxt, outFile);
-    writeFileSync(join(this.cfg.meetingsBase, "recording-started-at.txt"), new Date().toString());
-    notify("Meeting recording started");
+    notify(this.cfg, "Meeting recording started");
     log.info("recorder", `recording (pid ${proc.pid}, device :${this.cfg.recordDeviceIndex}) → ${outFile}`);
     return { ok: true, message: `recording started (${outFile})` };
   }
@@ -90,7 +92,7 @@ export class FfmpegRecorder implements Recorder {
   async stop(): Promise<{ ok: boolean; message: string }> {
     const pidFile = this.cfg.paths.recordingPid;
     if (!this.isRecording()) {
-      rmSync(pidFile, { force: true }); // clean up a stale pid file if present
+      this.clearRecordingState(); // clear any stale pid/current-recording files
       this.finalizeOrphans(); // rescue a partial whose ffmpeg already exited on its own
       return { ok: false, message: "not recording" };
     }
@@ -110,12 +112,18 @@ export class FfmpegRecorder implements Recorder {
       }
       await sleep(100);
     }
-    rmSync(pidFile, { force: true });
-    rmSync(join(this.cfg.meetingsBase, "recording-started-at.txt"), { force: true });
+    this.clearRecordingState();
     const moved = this.finalizeOrphans();
-    notify("Meeting recording stopped");
+    notify(this.cfg, "Meeting recording stopped");
     log.info("recorder", `stopped recording (pid ${pid})`);
     return { ok: true, message: moved ? `recording stopped → ${moved}` : "recording stopped" };
+  }
+
+  /** Remove the recording state files once a recording has truly ended. Idempotent —
+   *  safe to call when they're already gone. */
+  private clearRecordingState(): void {
+    rmSync(this.cfg.paths.recordingPid, { force: true });
+    rmSync(this.cfg.paths.currentRecordingTxt, { force: true });
   }
 
   /** Move any completed-but-unmoved recordings from .partial/ into inbox/. Called by
@@ -150,24 +158,14 @@ export class FfmpegRecorder implements Recorder {
         if (existsSync(src)) log.warn("recorder", `could not finalize ${name}: ${String(err)}`);
       }
     }
+    // We finalized an orphan → the recording it belonged to has ended (MAX_DURATION cap
+    // or crash, no explicit stop), so retire its now-stale state files too.
+    if (last) this.clearRecordingState();
     return last;
   }
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
 function stamp(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
-}
-
-function notify(message: string): void {
-  try {
-    Bun.spawn(["osascript", "-e", `display notification "${message}" with title "Recording" sound name "Glass"`], {
-      stdout: "ignore",
-      stderr: "ignore",
-    }).unref();
-  } catch {
-    /* notifications are best-effort */
-  }
 }

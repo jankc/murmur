@@ -107,7 +107,7 @@ Set `OBSIDIAN_VAULT` (and optionally `VAULT_FOLDER`, default `Murmur`) in `confi
 <OBSIDIAN_VAULT>/Murmur/2026-06/2026-06-18 16-21 <generated title>.md
 ```
 
-The originals in `~/Recordings/Meetings/summaries` stay the source of truth — the vault is a derived view (summaries only; transcripts aren't copied). Each note gets a short LLM-generated title (also used in the filename, `:`→`-` for macOS/Obsidian safety) and YAML frontmatter:
+The originals in `~/Recordings/Meetings/summaries` stay the source of truth — the vault is a derived view (summaries only; transcripts aren't copied). Each note gets a short title — produced as the summary's own first heading, so archiving needs no extra model call (older, title-less summaries fall back to a dedicated title call). The title is also used in the filename (`:`→`-` for macOS/Obsidian safety), alongside YAML frontmatter:
 
 ```yaml
 ---
@@ -128,6 +128,15 @@ Archiving is idempotent (skips if a note with the same `YYYY-MM-DD HH-MM` prefix
 - Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.
 - The `pan=` filter in `src/recorder.ts` is tuned for a specific Aggregate Device channel layout (mic on c0/c1, system on c2); adjust if yours differs.
 - whisply renames its input and writes a nested output dir, so murmur runs it against a hardlinked copy in `transcripts/.whisply-work/<base>/` and normalizes the result to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
+- Each pipeline stage streams to its own log under `logs/`: ffmpeg → `meeting-<ts>.log`, whisply → `whisply-<base>.log` (both stdout+stderr, so a failure's tail is preserved and a chatty child can never stall on a full pipe buffer).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
 - `config.sh` is the only shell file — it's just environment configuration (and a convenient hook for sourcing secrets). All logic is TypeScript in `src/`.
+
+## Development
+
+Pure TypeScript run directly by Bun — no build step. From `src/`:
+```sh
+bun run typecheck   # tsc --noEmit (strict)
+bun test            # unit tests for the pure logic (stamp/title/word parsing, queue)
+```

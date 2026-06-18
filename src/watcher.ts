@@ -6,9 +6,8 @@ import { watch } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
+import { sleep } from "./util.ts";
 import { log } from "./log.ts";
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export interface WatcherHandle {
   close(): void;

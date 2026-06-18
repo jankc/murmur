@@ -11,9 +11,10 @@ import { FfmpegRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/whisply.ts";
 import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
-import { resolveWav, type QueueItem } from "./queue.ts";
-import { PauseStore, readCurrent } from "./jobstate.ts";
-import { readJson } from "./state.ts";
+import { type QueueItem } from "./queue.ts";
+import { resolveWav, move } from "./recordings.ts";
+import { PauseStore } from "./jobstate.ts";
+import { offlineSnapshot } from "./status.ts";
 import { renderSwiftBar } from "./swiftbar.ts";
 
 const cfg = loadConfig();
@@ -70,6 +71,9 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
   const md = cfg.paths.summary(base);
   if (!(await Bun.file(md).exists())) await summarize(cfg, txt, signal);
   await archiveSummary(cfg, base, signal).catch((e) => console.error(`archive: ${String(e)}`));
+  // Reached only on success (transcribe/summarize throw on failure): retire the wav to
+  // processed/ so inbox stays pending-only, exactly as the daemon worker does.
+  await move(cfg, base, "processed");
   return { txt, md };
 }
 
@@ -103,25 +107,8 @@ switch (cmd) {
     if (await daemonUp()) {
       console.log(await (await daemonGet("/status")).text());
     } else {
-      // Daemon down — assemble status from on-disk state.
-      const recorder = new FfmpegRecorder(cfg);
-      const pause = await PauseStore.load(cfg);
-      const queue = await readJson<{ items: QueueItem[] }>(cfg.paths.queueFile, { items: [] });
-      console.log(
-        JSON.stringify(
-          {
-            daemon: "offline",
-            recording: recorder.isRecording(),
-            recordingFile: recorder.currentFile(),
-            pause: pause.mode(),
-            queueDepth: queue.items.length,
-            queue: queue.items.map((i) => i.basename),
-            current: await readCurrent(cfg),
-          },
-          null,
-          2,
-        ),
-      );
+      // Daemon down — assemble the same snapshot from on-disk state.
+      console.log(JSON.stringify({ daemon: "offline", ...(await offlineSnapshot(cfg)) }, null, 2));
     }
     break;
   }
