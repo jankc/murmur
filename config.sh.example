@@ -18,6 +18,9 @@ export MODEL_SUMMARY="qwen3.6:27b-mlx"
 #   https://huggingface.co/pyannote/speaker-diarization-3.1
 # export DIARIZE=1
 # export HF_TOKEN="hf_xxx"
+# Or, to feed a secret to the launchd daemon (which has no shell env) without storing
+# it here in plaintext, source your secrets file/manager from config.sh, e.g.:
+#   [ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
 
 # --- Inline fallback transcription engine (scripts/transcribe.sh, daemon-down only) ---
 # export MODEL_WHISPER="mlx-community/whisper-large-v3-turbo"

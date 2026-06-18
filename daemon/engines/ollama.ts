@@ -29,7 +29,10 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
       method: "POST",
       signal,
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: cfg.modelSummary, prompt, stream: false, think: false }),
+      // temperature 0 = greedy decoding: follows the prompt's rules far more reliably
+      // and avoids the random "empty/test" misclassification of real transcripts.
+      // (qwen3.6-mlx isn't bit-reproducible on Metal, but it reliably summarizes.)
+      body: JSON.stringify({ model: cfg.modelSummary, prompt, stream: false, think: false, options: { temperature: 0 } }),
     });
   } catch (err) {
     if (signal.aborted || isAbort(err)) throw new AbortError("ollama aborted");
