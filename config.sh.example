@@ -3,7 +3,7 @@
 # required; everything else has sane defaults baked into src/config.ts.
 
 export MEETINGS_BASE="$HOME/Recordings/Meetings"
-export MODEL_SUMMARY="qwen3.6:27b-mlx"
+export MODEL_SUMMARY="gemma4:26b-mlx"
 
 # --- Daemon / whisply (optional) ---
 # export MEETING_AI_PORT=7461                  # localhost control API port

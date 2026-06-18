@@ -112,7 +112,7 @@ export function loadConfig(): Config {
     hfToken: pick("HF_TOKEN", ""),
     cleanScratch: truthy(pick("MEETING_AI_CLEAN_SCRATCH", "1")),
     ollamaHost: pick("OLLAMA_HOST", "http://localhost:11434"),
-    modelSummary: pick("MODEL_SUMMARY", "qwen3.6:27b-mlx"),
+    modelSummary: pick("MODEL_SUMMARY", "gemma4:26b-mlx"),
     promptFile: pick("PROMPT_FILE", join(REPO_DIR, "prompts/summary.md")),
     vaultRoot: pick("OBSIDIAN_VAULT", ""),
     vaultFolder: pick("VAULT_FOLDER", "Murmur"),

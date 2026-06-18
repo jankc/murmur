@@ -15,7 +15,7 @@ record (ffmpeg) ─▶ recordings/*.wav ─▶ whisply (mlx + diarize) ─▶ ol
 brew install ffmpeg ollama terminal-notifier      # terminal-notifier optional (notifications)
 # Bun — via mise, or: curl -fsSL https://bun.sh/install | bash
 uv tool install whisply                            # transcription engine (bundles mlx-whisper on Apple Silicon)
-ollama pull qwen3.6:27b-mlx                         # or whatever you set as MODEL_SUMMARY
+ollama pull gemma4:26b-mlx                          # or whatever you set as MODEL_SUMMARY
 ```
 
 Put `murmur` on your PATH (the CLI is an executable Bun script — no build/install step):
@@ -33,7 +33,7 @@ ffmpeg -f avfoundation -list_devices true -i ""
 `config.sh` (gitignored; see `config.sh.example`) is sourced for configuration. Only the first two are required:
 ```sh
 export MEETINGS_BASE="$HOME/Recordings/Meetings"
-export MODEL_SUMMARY="qwen3.6:27b-mlx"
+export MODEL_SUMMARY="gemma4:26b-mlx"
 export RECORD_DEVICE_INDEX=1        # avfoundation index of your Aggregate Device
 export DIARIZE=1                    # speaker labels (see Diarization below)
 # HF_TOKEN for diarization — set directly, or source a secrets manager, e.g.:

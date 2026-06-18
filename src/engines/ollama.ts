@@ -1,5 +1,5 @@
 // Summarization via Ollama's HTTP API, preserving the existing Czech prompt and
-// model (qwen3.6:27b-mlx). Mirrors scripts/summarize.sh: preflight Ollama (start the
+// model (configurable via MODEL_SUMMARY). Preflight Ollama (start the
 // app + wait if down), prepend prompts/summary.md, write summaries/<base>.md.
 import { basename as pathBasename } from "node:path";
 import type { Config } from "../config.ts";
