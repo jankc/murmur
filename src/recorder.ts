@@ -3,9 +3,14 @@
 // State lives in the same files those scripts used (recording.pid, current-recording.txt,
 // recording-started-at.txt) so isRecording() works regardless of who started it.
 //
+// ffmpeg writes into recordings/.partial/ (NOT the watched inbox/) so an in-progress
+// recording never triggers the watcher or pollutes inbox. The finished .wav is moved
+// into inbox/ — by stop(), or by finalizeOrphans() if the recording ended on its own
+// (MAX_DURATION cap) or the recorder crashed.
+//
 // This is the seam the future meeting-app auto-record module plugs into.
-import { existsSync, readFileSync, openSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, openSync, mkdirSync, rmSync, writeFileSync, readdirSync, renameSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { Config } from "./config.ts";
 import { log } from "./log.ts";
 
@@ -17,6 +22,7 @@ export interface Recorder {
   currentFile(): string | null;
   start(): Promise<{ ok: boolean; message: string }>;
   stop(): Promise<{ ok: boolean; message: string }>;
+  finalizeOrphans(): void;
 }
 
 export class FfmpegRecorder implements Recorder {
@@ -45,8 +51,10 @@ export class FfmpegRecorder implements Recorder {
     if (this.isRecording()) return { ok: false, message: "already recording" };
 
     const ts = stamp(new Date());
-    const outFile = join(this.cfg.paths.inboxDir, `meeting-${ts}.wav`);
+    // Record into .partial/ (not watched); moved to inbox/ only when complete.
+    const outFile = join(this.cfg.paths.partialDir, `meeting-${ts}.wav`);
     const logFile = join(this.cfg.paths.logsDir, `meeting-${ts}.log`);
+    mkdirSync(this.cfg.paths.partialDir, { recursive: true });
     mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
     mkdirSync(this.cfg.paths.logsDir, { recursive: true });
 
@@ -83,6 +91,7 @@ export class FfmpegRecorder implements Recorder {
     const pidFile = this.cfg.paths.recordingPid;
     if (!this.isRecording()) {
       rmSync(pidFile, { force: true }); // clean up a stale pid file if present
+      this.finalizeOrphans(); // rescue a partial whose ffmpeg already exited on its own
       return { ok: false, message: "not recording" };
     }
     const pid = Number(readFileSync(pidFile, "utf8").trim());
@@ -91,13 +100,61 @@ export class FfmpegRecorder implements Recorder {
     } catch (err) {
       log.warn("recorder", `kill ${pid} failed: ${String(err)}`);
     }
+    // Wait for ffmpeg to actually exit (and thus finish writing the WAV header) before
+    // moving the file, so inbox never sees a half-finalized recording. ~5s cap.
+    for (let i = 0; i < 50; i++) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        break; // process gone
+      }
+      await sleep(100);
+    }
     rmSync(pidFile, { force: true });
     rmSync(join(this.cfg.meetingsBase, "recording-started-at.txt"), { force: true });
+    const moved = this.finalizeOrphans();
     notify("Meeting recording stopped");
     log.info("recorder", `stopped recording (pid ${pid})`);
-    return { ok: true, message: "recording stopped" };
+    return { ok: true, message: moved ? `recording stopped → ${moved}` : "recording stopped" };
+  }
+
+  /** Move any completed-but-unmoved recordings from .partial/ into inbox/. Called by
+   *  stop(), and periodically by the daemon to catch recordings that ended without an
+   *  explicit stop (MAX_DURATION cap, crash). No-op while a recording is in progress —
+   *  the live file is still being written and must not be touched. Returns the last
+   *  destination moved, or null. */
+  finalizeOrphans(): string | null {
+    if (this.isRecording()) return null;
+    const dir = this.cfg.paths.partialDir;
+    if (!existsSync(dir)) return null;
+    let last: string | null = null;
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".wav")) continue;
+      const src = join(dir, name);
+      // Guard against a file still being flushed: require a non-zero, stable size.
+      let size: number;
+      try {
+        size = statSync(src).size;
+      } catch {
+        continue;
+      }
+      if (size === 0) continue;
+      const dest = join(this.cfg.paths.inboxDir, basename(name));
+      try {
+        mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
+        renameSync(src, dest); // atomic within the same filesystem
+        log.info("recorder", `finalized recording → inbox/${name}`);
+        last = dest;
+      } catch (err) {
+        // A concurrent finalize (CLI stop + daemon sweep) may have moved it already.
+        if (existsSync(src)) log.warn("recorder", `could not finalize ${name}: ${String(err)}`);
+      }
+    }
+    return last;
   }
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 function stamp(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");

@@ -14,6 +14,7 @@ import { log } from "./log.ts";
 export async function runDaemon(cfg: Config): Promise<void> {
   // 1. Ensure the directory layout exists.
   for (const dir of [
+    cfg.paths.partialDir,
     cfg.paths.inboxDir,
     cfg.paths.processedDir,
     cfg.paths.failedDir,
@@ -53,12 +54,19 @@ export async function runDaemon(cfg: Config): Promise<void> {
       .catch((err) => log.warn("daemon", `enqueue ${wav} failed: ${String(err)}`));
   });
 
+  // Move recordings that finished without an explicit stop (MAX_DURATION cap / crash)
+  // from .partial/ into inbox/. Run once at boot, then poll — the watcher only sees
+  // inbox/, so these stragglers need a nudge. (Normal stop() finalizes immediately.)
+  recorder.finalizeOrphans();
+  const finalizeTimer = setInterval(() => recorder.finalizeOrphans(), 10_000);
+
   // 5. Graceful shutdown.
   let shuttingDown = false;
   const shutdown = (sig: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info("daemon", `${sig} received — shutting down`);
+    clearInterval(finalizeTimer);
     worker.shutdown();
     watcher.close();
     server.stop(true);

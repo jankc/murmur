@@ -5,12 +5,12 @@ Local meeting recorder, transcriber, and summarizer for macOS. Records an Aggreg
 One stack: a single [Bun](https://bun.sh)/TypeScript codebase in `src/` provides both the **`murmur` CLI** (manual control) and a long-lived **daemon** (automatic, GPU-pause-aware processing). They share the same modules, so every step has one implementation.
 
 ```
-record (ffmpeg) ─▶ recordings/inbox/*.wav ─▶ whisply (mlx + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
-                                              └ daemon: watch inbox · serial queue · GPU-pause · auto-defer
+record (ffmpeg) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ whisply (mlx + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
+                                            └ daemon: watch inbox · serial queue · GPU-pause · auto-defer
                        on success the wav moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
 ```
 
-**A recording's folder is its state.** New recordings land in `recordings/inbox/`; the daemon watches *only* that folder. When a recording is fully processed (transcribed → summarized → archived) its `.wav` is **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves the `.wav` to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur process` re-run command to `logs/process-failures.log`.
+**A recording's folder is its state.** ffmpeg writes into `recordings/.partial/` (not watched), so an in-progress recording never triggers the pipeline or clutters the inbox. When recording ends the finished `.wav` is moved into `recordings/inbox/` — the only folder the daemon watches. Once fully processed (transcribed → summarized → archived) it's **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves it to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur process` re-run command to `logs/process-failures.log`.
 
 ## Install
 
