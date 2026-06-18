@@ -48,6 +48,26 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
   return out;
 }
 
+/** Generate a short meeting title from the finished summary (for the vault filename +
+ *  frontmatter). Small, fast call; assumes Ollama is already up (summarize ran first). */
+export async function generateTitle(cfg: Config, summaryText: string, signal: AbortSignal): Promise<string> {
+  const prompt = [
+    "Z následujícího shrnutí schůzky vytvoř krátký výstižný název (3–6 slov).",
+    "Bez uvozovek, bez data a bez koncové interpunkce. Odpověz POUZE názvem na jednom řádku.",
+    "",
+    summaryText.slice(0, 4000),
+  ].join("\n");
+  const res = await fetch(`${cfg.ollamaHost}/api/generate`, {
+    method: "POST",
+    signal,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: cfg.modelSummary, prompt, stream: false, think: false, options: { temperature: 0 } }),
+  });
+  if (!res.ok) throw new EngineError(`ollama title HTTP ${res.status}`, res.status);
+  const { response } = (await res.json()) as { response: string };
+  return response.trim().split("\n")[0]?.trim() ?? "";
+}
+
 async function preflight(cfg: Config, signal: AbortSignal): Promise<void> {
   if (await ping(cfg)) return;
   log.info("ollama", "not reachable — launching Ollama.app");

@@ -9,6 +9,7 @@ import type { Recorder } from "./recorder.ts";
 import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
 import { transcribe } from "./engines/whisply.ts";
 import { summarize } from "./engines/ollama.ts";
+import { archiveSummary } from "./archive.ts";
 import { EngineError, isAbort } from "./engines/errors.ts";
 import { logFailure } from "./failures.ts";
 import { notify } from "./notify.ts";
@@ -91,6 +92,16 @@ export class Worker {
         log.info("worker", `summary exists, skipping summarization: ${job.basename}`);
       } else {
         await summarize(this.cfg, txt, ac.signal);
+      }
+
+      // Copy into the Obsidian vault (no-op if unconfigured). Abort propagates → requeue;
+      // a vault error is logged but must not fail a job whose summary already exists locally.
+      await writeCurrent(this.cfg, { basename: job.basename, stage: "archive", startedAt: Date.now() });
+      try {
+        await archiveSummary(this.cfg, job.basename, ac.signal);
+      } catch (err) {
+        if (isAbort(err) || ac.signal.aborted) throw err;
+        log.warn("worker", `archive failed for ${job.basename}: ${String(err)}`);
       }
 
       await this.queue.commitDequeue(job.basename);

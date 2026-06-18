@@ -96,6 +96,30 @@ ln -s "$PWD/swiftbar/murmur.5s.sh" "$HOME/Library/Application Support/SwiftBar/P
 
 Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`, and accept the pyannote model conditions once on HuggingFace ([segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)). Transcripts then carry `[SPEAKER_xx]` labels + timestamps. If a diarized run fails (missing token, gated model), it automatically retries without diarization so you still get a transcript.
 
+## Obsidian vault archiving (optional)
+
+Set `OBSIDIAN_VAULT` (and optionally `VAULT_FOLDER`, default `Murmur`) in `config.sh` and each finished summary is **copied** into your vault, organized by month:
+
+```
+<OBSIDIAN_VAULT>/Murmur/2026-06/2026-06-18 16-21 <generated title>.md
+```
+
+The originals in `~/Recordings/Meetings/summaries` stay the source of truth — the vault is a derived view (summaries only; transcripts aren't copied). Each note gets a short LLM-generated title (also used in the filename, `:`→`-` for macOS/Obsidian safety) and YAML frontmatter:
+
+```yaml
+---
+title: "Workflow nahrávání meetingů"
+date: 2026-06-18
+time: "16:21"
+source: "meeting-2026-06-18_16-21-05.wav"
+duration: "1:13:25"
+speakers: 2            # only when diarized
+tags: [meeting, murmur]
+---
+```
+
+Archiving is idempotent (skips if a note with the same `YYYY-MM-DD HH-MM` prefix exists) and best-effort — a vault/iCloud hiccup is logged but never fails the local job. Leave `OBSIDIAN_VAULT` empty to disable.
+
 ## Notes
 
 - Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.

@@ -21,6 +21,9 @@ export interface Config {
   ollamaHost: string;
   modelSummary: string;
   promptFile: string;
+  // Obsidian vault archiving (optional — empty vaultRoot disables it)
+  vaultRoot: string;
+  vaultFolder: string;
   // recording (ffmpeg from the Aggregate Device)
   recordDeviceIndex: string;
   maxDurationSeconds: number;
@@ -47,6 +50,8 @@ const KEYS = [
   "MEETING_AI_CLEAN_SCRATCH",
   "RECORD_DEVICE_INDEX",
   "MAX_DURATION_SECONDS",
+  "OBSIDIAN_VAULT",
+  "VAULT_FOLDER",
 ] as const;
 
 type RawEnv = Partial<Record<(typeof KEYS)[number], string>>;
@@ -109,6 +114,8 @@ export function loadConfig(): Config {
     ollamaHost: pick("OLLAMA_HOST", "http://localhost:11434"),
     modelSummary: pick("MODEL_SUMMARY", "qwen3.6:27b-mlx"),
     promptFile: pick("PROMPT_FILE", join(REPO_DIR, "prompts/summary.md")),
+    vaultRoot: pick("OBSIDIAN_VAULT", ""),
+    vaultFolder: pick("VAULT_FOLDER", "Murmur"),
     recordDeviceIndex: pick("RECORD_DEVICE_INDEX", "0"),
     maxDurationSeconds: Number(pick("MAX_DURATION_SECONDS", "7200")),
     childPath: buildChildPath(whisplyBin),

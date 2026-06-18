@@ -33,7 +33,7 @@ export class PauseStore {
 
 export interface CurrentJob {
   basename: string;
-  stage: "transcribe" | "summarize";
+  stage: "transcribe" | "summarize" | "archive";
   startedAt: number;
 }
 

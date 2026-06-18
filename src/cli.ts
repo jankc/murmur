@@ -10,6 +10,7 @@ import { runDaemon } from "./daemon.ts";
 import { FfmpegRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/whisply.ts";
 import { summarize } from "./engines/ollama.ts";
+import { archiveSummary } from "./archive.ts";
 import { resolveWav, type QueueItem } from "./queue.ts";
 import { PauseStore, readCurrent } from "./jobstate.ts";
 import { readJson } from "./state.ts";
@@ -57,6 +58,7 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
   if (!(await Bun.file(txt).exists())) await transcribe(cfg, job, signal);
   const md = cfg.paths.summary(base);
   if (!(await Bun.file(md).exists())) await summarize(cfg, txt, signal);
+  await archiveSummary(cfg, base, signal).catch((e) => console.error(`archive: ${String(e)}`));
   return { txt, md };
 }
 
@@ -167,7 +169,9 @@ switch (cmd) {
     if (!arg) die("usage: murmur summarize <transcript|basename>");
     const txt = (await Bun.file(arg).exists()) ? arg : cfg.paths.transcript(basename(arg, ".txt"));
     if (!(await Bun.file(txt).exists())) die(`transcript not found: ${arg}`);
-    const md = await summarize(cfg, txt, new AbortController().signal);
+    const sig = new AbortController().signal;
+    const md = await summarize(cfg, txt, sig);
+    await archiveSummary(cfg, basename(txt, ".txt"), sig).catch((e) => console.error(`archive: ${String(e)}`));
     console.log(md);
     break;
   }
