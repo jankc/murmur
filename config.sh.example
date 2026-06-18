@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copy to config.sh (gitignored) and edit. Only MEETINGS_BASE + MODEL_SUMMARY are
-# required; everything else has sane defaults baked into daemon/config.ts.
+# required; everything else has sane defaults baked into src/config.ts.
 
 export MEETINGS_BASE="$HOME/Recordings/Meetings"
 export MODEL_SUMMARY="qwen3.6:27b-mlx"

@@ -10,11 +10,11 @@
   <array>
     <string>/Users/jank/.local/share/mise/installs/bun/latest/bin/bun</string>
     <string>run</string>
-    <string>/Users/jank/dev/personal/meeting-ai/daemon/main.ts</string>
+    <string>/Users/jank/dev/personal/meeting-ai/src/main.ts</string>
   </array>
 
   <key>WorkingDirectory</key>
-  <string>/Users/jank/dev/personal/meeting-ai/daemon</string>
+  <string>/Users/jank/dev/personal/meeting-ai/src</string>
 
   <key>RunAtLoad</key>
   <true/>

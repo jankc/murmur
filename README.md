@@ -1,155 +1,107 @@
-# meeting-ai
+# murmur
 
-Local meeting recorder, transcriber, and summarizer for macOS. Captures audio from an Aggregate Device with `ffmpeg`, transcribes with `whisply` (mlx-whisper + optional speaker diarization), and summarizes with a local LLM via `ollama`. A SwiftBar menu item controls recording and processing from the menubar, and a background **daemon** watches the recordings folder so a freshly-stopped meeting flows straight to summary without you lifting a finger.
+Local meeting recorder, transcriber, and summarizer for macOS. Records an Aggregate Device with `ffmpeg`, transcribes with `whisply` (mlx-whisper + optional speaker diarization), and summarizes with a local LLM via `ollama`. Everything runs locally — no cloud, no third parties.
 
-Everything runs locally — no cloud, no third parties.
+One stack: a single [Bun](https://bun.sh)/TypeScript codebase in `src/` provides both the **`murmur` CLI** (manual control) and a long-lived **daemon** (automatic, GPU-pause-aware processing). They share the same modules, so every step has one implementation.
 
-## Daemon (recommended)
+```
+record (ffmpeg) ─▶ recordings/*.wav ─▶ whisply (mlx + diarize) ─▶ ollama ─▶ summaries/*.md
+                                        └ daemon: watch · serial queue · GPU-pause · auto-defer-while-recording
+```
 
-The `daemon/` directory is a single long-lived [Bun](https://bun.sh) process that orchestrates the pipeline. It replaces the old `fswatch`-based `watch-recordings.sh` and adds:
-
-- a **persistent job queue** (survives restarts),
-- a **serial worker** — exactly one GPU job at a time,
-- **soft/hard GPU-pause** so you can free the GPU for other work,
-- **auto-defer while recording** — processing waits until a live meeting finishes,
-- **whisply** transcription (mlx-whisper speed; speaker diarization when configured),
-- a **localhost control API** consumed by SwiftBar and the CLI scripts.
-
-Engines stay as subprocesses/HTTP (whisply, ollama, ffmpeg, terminal-notifier); Bun is the only added dependency. The recorder reuses the existing `record-meeting.sh`/`stop-meeting.sh` scripts, so the tuned ffmpeg `pan` filter is unchanged.
-
-### Control API (`http://127.0.0.1:7461`)
-
-| Method + path | Body | Effect |
-|---|---|---|
-| `GET /status` | — | JSON: recording?, pause mode, queue depth + items, current job |
-| `POST /record/start` · `/record/stop` | — | start/stop recording (runs the bash scripts) |
-| `POST /pause` | `{"mode":"soft"\|"hard"}` | soft = finish current job then idle; hard = abort current + requeue |
-| `POST /resume` | — | resume processing |
-| `POST /enqueue` | `{"wav":"<path\|basename>","force":true?}` | queue a recording (dedups; skips if already summarized unless `force`) |
-| `GET /swiftbar` | — | pre-rendered SwiftBar plugin block |
-
-### Run it
+## Install
 
 ```sh
-# Dev (foreground):
-bun run daemon/main.ts
+brew install ffmpeg ollama terminal-notifier      # terminal-notifier optional (notifications)
+# Bun — via mise, or: curl -fsSL https://bun.sh/install | bash
+uv tool install whisply                            # transcription engine (bundles mlx-whisper on Apple Silicon)
+ollama pull qwen3.6:27b-mlx                         # or whatever you set as MODEL_SUMMARY
+```
 
-# Install as a LaunchAgent (RunAtLoad + KeepAlive):
+Put `murmur` on your PATH (the CLI is an executable Bun script — no build/install step):
+```sh
+ln -s "$PWD/src/cli.ts" ~/.local/bin/murmur
+```
+
+Create an **Aggregate Device** (mic + system audio, e.g. via BlackHole) in *Audio MIDI Setup* and note its avfoundation audio index:
+```sh
+ffmpeg -f avfoundation -list_devices true -i ""
+```
+
+## Configure
+
+`config.sh` (gitignored; see `config.sh.example`) is sourced for configuration. Only the first two are required:
+```sh
+export MEETINGS_BASE="$HOME/Recordings/Meetings"
+export MODEL_SUMMARY="qwen3.6:27b-mlx"
+export RECORD_DEVICE_INDEX=1        # avfoundation index of your Aggregate Device
+export DIARIZE=1                    # speaker labels (see Diarization below)
+# HF_TOKEN for diarization — set directly, or source a secrets manager, e.g.:
+[ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
+```
+Defaults for everything else live in `src/config.ts` (port 7461, whisply model `large-v3-turbo`, language `cs`, device `mlx`, `MAX_DURATION_SECONDS=7200`, …).
+
+## Usage — the `murmur` CLI
+
+```sh
+murmur record [--device N]   # start recording the Aggregate Device
+murmur stop                  # stop recording
+murmur process [audio]       # transcribe + summarize (newest, or by path/basename)
+murmur transcribe [audio]    # transcribe only → prints transcript path
+murmur summarize <name>      # summarize a transcript → prints summary path
+murmur status                # recording / pause / queue state (JSON)
+murmur pause [hard]          # pause processing (soft = finish current; hard = abort + requeue)
+murmur resume
+murmur daemon                # run the orchestrator daemon in the foreground
+```
+
+Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. Processing is idempotent — transcription is skipped if `transcripts/<base>.txt` exists and summarization if `summaries/<base>.md` exists.
+
+## The daemon (automatic processing)
+
+The daemon watches `recordings/` and runs each new `.wav` through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand.
+
+Run it always-on via the LaunchAgent:
+```sh
 cp launchd/com.jank.meeting-ai.daemon.plist ~/Library/LaunchAgents/
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jank.meeting-ai.daemon.plist
 launchctl kickstart -k gui/$(id -u)/com.jank.meeting-ai.daemon
 tail -f ~/Recordings/Meetings/logs/daemon.{out,err}.log
 ```
+After editing the plist, `bootout` then `bootstrap` again (`kickstart` alone won't re-read it). The plist hard-codes the absolute `bun` path (a mise install) and a `PATH` that resolves `bun`/`whisply`/`ffmpeg`/`ollama`/`terminal-notifier` — update it if you reinstall bun.
 
-> **Migration:** if you previously installed the old watch agent, stop it first so the two don't double-process:
+> If you ran an older `fswatch` watch agent, stop it so the two don't double-process:
 > `launchctl bootout gui/$(id -u)/com.jank.meeting-ai.watch`
 
-The plist hard-codes the absolute path to `bun` (a mise install) and a `PATH` that resolves `bun`, `whisply`, `ffmpeg`, `ollama`, and `terminal-notifier`. If you reinstall bun, update `ProgramArguments` in the plist.
+### Control API (`http://127.0.0.1:7461`)
 
-### Diarization (speaker labels) — opt-in
+The CLI and SwiftBar talk to this; you can too.
 
-Off by default. To enable, set `DIARIZE=1` and `HF_TOKEN=...` in `config.sh`, then accept the pyannote model terms once on HuggingFace ([segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)). Without a token the daemon logs a warning and transcribes without speaker labels (it never blocks).
+| Method + path | Body | Effect |
+|---|---|---|
+| `GET /status` | — | recording?, pause mode, queue depth + items, current job |
+| `POST /record/start` · `/record/stop` | — | start/stop recording |
+| `POST /pause` | `{"mode":"soft"\|"hard"}` | soft = finish current then idle; hard = abort + requeue |
+| `POST /resume` | — | resume processing |
+| `POST /enqueue` | `{"wav":"<path\|basename>","force":true?}` | queue a recording (dedups; skips if already summarized unless `force`) |
+| `GET /swiftbar` | — | pre-rendered SwiftBar plugin block |
 
-## Layout
-
-### Recording
-- `scripts/record-meeting.sh [device-index]` — start an `ffmpeg` recording (writes `recording.pid`, `current-recording.txt`, `recording-started-at.txt` under `$MEETINGS_BASE`)
-- `scripts/stop-meeting.sh` — stop the running recording
-- `scripts/toggle-recording.sh` — start/stop wrapper used by SwiftBar (delegates to two `.app` launchers, see Setup step 6)
-- `swiftbar/menubar.5s.sh` — SwiftBar plugin: shows recording state + toggle action
-
-### Processing
-- `daemon/` — the Bun orchestrator (see [Daemon](#daemon-recommended) above). The normal processing path.
-- `scripts/process.sh [audio]` — thin client: enqueues the recording on the daemon. Falls back to inline transcribe+summarize (via the scripts below) if the daemon is unreachable.
-- `scripts/transcribe.sh [audio]` — manual one-shot transcription via `whisply` (same engine + diarization as the daemon; normalizes whisply's nested output to the flat `.txt`). Idempotent: skips if the `.txt` already exists. Argument is a path, basename, or omitted (newest recording).
-- `scripts/summarize.sh [transcript]` — summarize one transcript. Preflights Ollama at `http://localhost:11434` and runs `open -a Ollama` if it's down, then waits. Handy for re-summarizing after editing `prompts/summary.md`.
-- `scripts/process-latest.sh` — back-compat wrapper around `process.sh` (defaults to newest recording).
-- `scripts/watch-recordings.sh` — **deprecated**, replaced by the daemon. Don't run it alongside the daemon.
-
-### Config & assets
-- `config.sh` — local config (gitignored); see `config.sh.example`
-- `prompts/summary.md` — prompt used for the summary step (shared by the daemon and `summarize.sh`)
-- `launchd/com.jank.meeting-ai.daemon.plist` — LaunchAgent for the daemon
-- `launchd/com.jank.meeting-ai.watch.plist` — old LaunchAgent for the deprecated `watch-recordings.sh`
-
-Recordings, transcripts, summaries, and runtime state live under `$MEETINGS_BASE` (default `~/Recordings/Meetings`), kept out of the repo on purpose.
-
-## Setup
-
-1. Install dependencies:
-   ```sh
-   brew install ffmpeg ollama terminal-notifier
-   # Bun (daemon runtime) — via mise, or: curl -fsSL https://bun.sh/install | bash
-   # whisply — the only transcription engine (bundles mlx-whisper on Apple Silicon):
-   uv tool install whisply        # or: pipx install whisply
-   ```
-   `terminal-notifier` is optional (notifications). `fswatch` and a standalone `mlx-whisper` are no longer needed — the daemon uses a native watcher, and both the daemon and `transcribe.sh` transcribe via `whisply`.
-2. Create an Aggregate Device in **Audio MIDI Setup** that mixes mic + system audio, and note its `avfoundation` index (`ffmpeg -f avfoundation -list_devices true -i ""`).
-3. Pull a summary model:
-   ```sh
-   ollama pull qwen3:30b   # or whatever you set in config.sh
-   ```
-   Make sure Ollama is running — either install **Ollama.app** and set it to launch at login, or `brew services start ollama`. `summarize.sh` will try to start the app for you if it isn't responding.
-4. Create `config.sh`:
-   ```sh
-   #!/usr/bin/env bash
-   export MEETINGS_BASE="$HOME/Recordings/Meetings"
-   export MODEL_SUMMARY="qwen3:30b"
-   # Optional overrides:
-   # export MODEL_WHISPER="mlx-community/whisper-large-v3-turbo"
-   # export MAX_DURATION_SECONDS=7200
-   ```
-5. (Optional) Install [SwiftBar](https://swiftbar.app) and symlink `swiftbar/menubar.5s.sh` into your SwiftBar plugins folder.
-6. (Optional) Build two Automator apps named **Meeting Recorder Start** and **Meeting Recorder Stop**, each containing a single **Run Shell Script** action:
-   ```sh
-   /Users/$USER/code/personal/meeting-ai/scripts/record-meeting.sh
-   ```
-   ```sh
-   /Users/$USER/code/personal/meeting-ai/scripts/stop-meeting.sh
-   ```
-   Save them to `/Applications`. `toggle-recording.sh` `open`s these by name so the SwiftBar click survives macOS's stricter shell-from-menubar permissions.
-
-## Usage
-
-### Record
-```sh
-./scripts/record-meeting.sh [device-index]   # default 0
-./scripts/stop-meeting.sh
-```
-Or click the SwiftBar menubar item.
-
-### Process
-```sh
-./scripts/process.sh                                      # newest recording
-./scripts/process.sh meeting-2026-04-27_14-32-15          # by basename
-./scripts/process.sh /path/to/file.wav                    # by full path
-./scripts/transcribe.sh <name>                            # transcript only
-./scripts/summarize.sh <name>                             # re-summarize without re-transcribing (e.g. after editing prompts/summary.md)
-```
-
-Output goes to `$MEETINGS_BASE/transcripts/` and `$MEETINGS_BASE/summaries/`. Failures are appended to `$MEETINGS_BASE/logs/process-failures.log` with the exact command to retry.
-
-### Auto-process new recordings
-
-Run the [daemon](#daemon-recommended) — it watches `recordings/` and processes new `.wav` files automatically (once their size stabilizes, and deferring until any in-progress recording stops). After editing the plist, `bootout` then `bootstrap` again — `kickstart` alone won't re-read the file. Daemon stdout/stderr land in `$MEETINGS_BASE/logs/daemon.{out,err}.log`.
-
-### Pause / resume processing
+## SwiftBar (optional menubar)
 
 ```sh
-curl -s -X POST localhost:7461/pause  -d '{"mode":"soft"}'   # finish current job, then idle
-curl -s -X POST localhost:7461/pause  -d '{"mode":"hard"}'   # abort current job + requeue (frees GPU now)
-curl -s -X POST localhost:7461/resume
-curl -s localhost:7461/status                                # queue depth, current job, pause state
+ln -s "$PWD/swiftbar/murmur.5s.sh" ~/Library/Application\ Support/SwiftBar/Plugins/
 ```
-Or use the SwiftBar menu.
+Shows `🔴` recording / `⚪` idle / `⏸` paused plus the queue depth, with menu actions (start/stop recording, pause/resume) that hit the control API. The plugin is just a fetch of `GET /swiftbar`; if the daemon is down it shows "offline". (Hard-codes port 7461 — edit the plugin if you changed `MEETING_AI_PORT`.)
+
+## Diarization (speaker labels) — opt-in
+
+Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`, and accept the pyannote model conditions once on HuggingFace ([segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)). Transcripts then carry `[SPEAKER_xx]` labels + timestamps. If a diarized run fails (missing token, gated model), it automatically retries without diarization so you still get a transcript.
 
 ## Notes
 
-- Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h) so a forgotten session can't fill the disk.
-- Audio is downmixed to mono 16 kHz PCM — small files, fine for Whisper.
-- The `pan=` filter in `record-meeting.sh` is tuned for a specific Aggregate Device channel layout; adjust if your mic/system channels differ.
-- Processing is idempotent. The daemon (and `process.sh`) skip transcription if `transcripts/<base>.txt` exists and summarization if `summaries/<base>.md` exists; a job stays queued until both succeed, so a crash mid-job replays cleanly.
-- whisply writes a nested layout under its output dir; the daemon runs it into `transcripts/.whisply-work/<base>/` and normalizes the result to the flat `transcripts/<base>.txt` the rest of the pipeline expects.
-- When the daemon or SwiftBar starts a recording it uses `RECORD_DEVICE_INDEX` (default `0`) as the `avfoundation` index of your Aggregate Device — set it in `config.sh` if yours isn't 0. The manual `record-meeting.sh [index]` takes the index as an argument instead.
-- Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `daemon.lock`) — inspectable and persistent across restarts.
-- The daemon LaunchAgent's `EnvironmentVariables.PATH` must resolve `bun`, `whisply`, `ffmpeg`, `ollama`, and `terminal-notifier`. If you're on Intel Homebrew, a non-default prefix, or reinstall bun, edit the plist accordingly.
+- Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.
+- The `pan=` filter in `src/recorder.ts` is tuned for a specific Aggregate Device channel layout (mic on c0/c1, system on c2); adjust if yours differs.
+- whisply renames its input and writes a nested output dir, so murmur runs it against a hardlinked copy in `transcripts/.whisply-work/<base>/` and normalizes the result to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
+- Summaries use `temperature: 0` for reliable, deterministic instruction-following.
+- Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
+- `config.sh` is the only shell file — it's just environment configuration (and a convenient hook for sourcing secrets). All logic is TypeScript in `src/`.
