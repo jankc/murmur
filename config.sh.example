@@ -22,9 +22,6 @@ export MODEL_SUMMARY="qwen3.6:27b-mlx"
 # it here in plaintext, source your secrets file/manager from config.sh, e.g.:
 #   [ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
 
-# --- Inline fallback transcription engine (scripts/transcribe.sh, daemon-down only) ---
-# export MODEL_WHISPER="mlx-community/whisper-large-v3-turbo"
-
 # --- Recording (optional) ---
 # export MAX_DURATION_SECONDS=7200             # 2h hard cap
 

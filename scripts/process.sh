@@ -23,7 +23,7 @@ if RESP="$(curl -fsS -X POST "http://127.0.0.1:$PORT/enqueue" \
   exit 0
 fi
 
-echo "Daemon not reachable on :$PORT — processing inline (mlx_whisper, no diarization)."
+echo "Daemon not reachable on :$PORT — processing inline (whisply + ollama)."
 
 FAILURE_LOG="$BASE_DIR/logs/process-failures.log"
 mkdir -p "$BASE_DIR/logs"

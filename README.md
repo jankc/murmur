@@ -60,8 +60,8 @@ Off by default. To enable, set `DIARIZE=1` and `HF_TOKEN=...` in `config.sh`, th
 
 ### Processing
 - `daemon/` — the Bun orchestrator (see [Daemon](#daemon-recommended) above). The normal processing path.
-- `scripts/process.sh [audio]` — thin client: enqueues the recording on the daemon. Falls back to inline transcribe+summarize (via the scripts below, using `mlx_whisper`) if the daemon is unreachable.
-- `scripts/transcribe.sh [audio]` — manual one-shot transcription with `mlx_whisper` (the daemon uses `whisply`). Idempotent: skips if the `.txt` already exists. Argument is a path, basename, or omitted (newest recording).
+- `scripts/process.sh [audio]` — thin client: enqueues the recording on the daemon. Falls back to inline transcribe+summarize (via the scripts below) if the daemon is unreachable.
+- `scripts/transcribe.sh [audio]` — manual one-shot transcription via `whisply` (same engine + diarization as the daemon; normalizes whisply's nested output to the flat `.txt`). Idempotent: skips if the `.txt` already exists. Argument is a path, basename, or omitted (newest recording).
 - `scripts/summarize.sh [transcript]` — summarize one transcript. Preflights Ollama at `http://localhost:11434` and runs `open -a Ollama` if it's down, then waits. Handy for re-summarizing after editing `prompts/summary.md`.
 - `scripts/process-latest.sh` — back-compat wrapper around `process.sh` (defaults to newest recording).
 - `scripts/watch-recordings.sh` — **deprecated**, replaced by the daemon. Don't run it alongside the daemon.
@@ -80,11 +80,10 @@ Recordings, transcripts, summaries, and runtime state live under `$MEETINGS_BASE
    ```sh
    brew install ffmpeg ollama terminal-notifier
    # Bun (daemon runtime) — via mise, or: curl -fsSL https://bun.sh/install | bash
-   # whisply (daemon transcription engine, includes mlx-whisper on Apple Silicon):
+   # whisply — the only transcription engine (bundles mlx-whisper on Apple Silicon):
    uv tool install whisply        # or: pipx install whisply
-   pip install mlx-whisper        # only for the scripts/transcribe.sh inline fallback
    ```
-   `terminal-notifier` is optional (notifications). `fswatch` is no longer needed — the daemon uses a native watcher.
+   `terminal-notifier` is optional (notifications). `fswatch` and a standalone `mlx-whisper` are no longer needed — the daemon uses a native watcher, and both the daemon and `transcribe.sh` transcribe via `whisply`.
 2. Create an Aggregate Device in **Audio MIDI Setup** that mixes mic + system audio, and note its `avfoundation` index (`ffmpeg -f avfoundation -list_devices true -i ""`).
 3. Pull a summary model:
    ```sh
