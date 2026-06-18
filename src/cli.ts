@@ -13,6 +13,7 @@ import { summarize } from "./engines/ollama.ts";
 import { resolveWav, type QueueItem } from "./queue.ts";
 import { PauseStore, readCurrent } from "./jobstate.ts";
 import { readJson } from "./state.ts";
+import { renderSwiftBar } from "./swiftbar.ts";
 
 const cfg = loadConfig();
 const [cmd = "help", ...rest] = process.argv.slice(2);
@@ -124,6 +125,12 @@ switch (cmd) {
     if (await daemonUp()) await daemonPost("/resume");
     else await (await PauseStore.load(cfg)).set("none");
     console.log("resumed");
+    break;
+  }
+
+  case "swiftbar": {
+    // Used by the SwiftBar plugin; renders from on-disk state (daemon-independent).
+    process.stdout.write(await renderSwiftBar(cfg, process.execPath, import.meta.path));
     break;
   }
 

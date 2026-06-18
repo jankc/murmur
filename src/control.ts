@@ -79,9 +79,6 @@ export function startControl(deps: Deps): ReturnType<typeof Bun.serve> {
           worker.notifyChange();
           return json({ enqueued: item?.basename ?? null });
         }
-        case "GET /swiftbar": {
-          return new Response(renderSwiftBar(deps), { headers: { "content-type": "text/plain; charset=utf-8" } });
-        }
         default:
           return json({ error: "not found" }, 404);
       }
@@ -90,39 +87,4 @@ export function startControl(deps: Deps): ReturnType<typeof Bun.serve> {
 
   log.info("control", `listening on http://127.0.0.1:${cfg.port}`);
   return server;
-}
-
-/** Render a complete SwiftBar plugin block so the menubar script is just `curl`. */
-function renderSwiftBar({ cfg, queue, recorder, pause }: Deps): string {
-  const api = `http://127.0.0.1:${cfg.port}`;
-  const recording = recorder.isRecording();
-  const paused = pause.isPaused();
-  const depth = queue.size();
-  // SwiftBar runs the `bash=` binary with paramN as argv; values must contain no spaces.
-  const action = (path: string, body?: string): string => {
-    const parts = [`bash=/usr/bin/curl`, `param1=-fsS`, `param2=-X`, `param3=POST`, `param4=${api}${path}`];
-    if (body) parts.push(`param5=-d`, `param6=${body}`);
-    parts.push("terminal=false", "refresh=true");
-    return parts.join(" ");
-  };
-
-  const title = recording ? "🔴" : paused ? "⏸" : "⚪";
-  const lines: string[] = [depth > 0 ? `${title} ${depth}` : title, "---"];
-  if (recording) {
-    const f = recorder.currentFile();
-    if (f) lines.push(`Recording: ${f.split("/").pop()} | color=red`);
-    lines.push(`Stop recording | ${action("/record/stop")}`);
-  } else {
-    lines.push(`Start recording | ${action("/record/start")}`);
-  }
-  lines.push(`Queue: ${depth}`);
-  if (paused) {
-    lines.push(`Processing: paused (${pause.mode()}) | color=orange`);
-    lines.push(`Resume processing | ${action("/resume")}`);
-  } else {
-    lines.push(`Processing: active`);
-    lines.push(`Pause (soft — finish current) | ${action("/pause", '{"mode":"soft"}')}`);
-    lines.push(`Pause now (hard — abort current) | ${action("/pause", '{"mode":"hard"}')}`);
-  }
-  return lines.join("\n") + "\n";
 }

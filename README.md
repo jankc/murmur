@@ -84,14 +84,13 @@ The CLI and SwiftBar talk to this; you can too.
 | `POST /pause` | `{"mode":"soft"\|"hard"}` | soft = finish current then idle; hard = abort + requeue |
 | `POST /resume` | — | resume processing |
 | `POST /enqueue` | `{"wav":"<path\|basename>","force":true?}` | queue a recording (dedups; skips if already summarized unless `force`) |
-| `GET /swiftbar` | — | pre-rendered SwiftBar plugin block |
 
 ## SwiftBar (optional menubar)
 
 ```sh
-ln -s "$PWD/swiftbar/murmur.5s.sh" ~/Library/Application\ Support/SwiftBar/Plugins/
+ln -s "$PWD/swiftbar/murmur.5s.sh" "$HOME/Library/Application Support/SwiftBar/Plugins/murmur.5s.sh"
 ```
-Shows `🔴` recording / `⚪` idle / `⏸` paused plus the queue depth, with menu actions (start/stop recording, pause/resume) that hit the control API. The plugin is just a fetch of `GET /swiftbar`; if the daemon is down it shows "offline". (Hard-codes port 7461 — edit the plugin if you changed `MEETING_AI_PORT`.)
+(If a stale `murmur.5s.sh` dir/file is already there, `rm -rf` it first.) Shows `🔴` recording / `⚪` idle / `⏸` paused plus the queue depth, with menu actions (start/stop recording, pause/resume). The plugin just calls `murmur swiftbar`, which renders from on-disk state and **works whether or not the daemon is running** — so it reflects a `murmur record` you started directly. Menu clicks run `murmur` too, so they also work in both modes.
 
 ## Diarization (speaker labels) — opt-in
 
