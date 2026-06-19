@@ -55,9 +55,12 @@ async function runWhisply(
   signal: AbortSignal,
   diarize: boolean,
 ): Promise<void> {
-  const args = ["run", "-f", localInput, "-o", scratch, "-d", cfg.device, "-m", cfg.whisplyModel, "-l", cfg.language, "-e", "txt"];
+  const args = ["run", "-f", localInput, "-o", scratch, "-d", cfg.device, "-m", cfg.whisplyModel, "-e", "txt"];
+  // Only force a language when explicitly configured; "auto" (default) lets whisply detect
+  // it. Forcing the wrong language makes whisper emit nothing for that speech (drops it).
+  if (cfg.language && cfg.language !== "auto") args.push("-l", cfg.language);
   if (diarize) args.push("--annotate", "-hf", cfg.hfToken);
-  log.info("whisply", `transcribing ${label}${diarize ? " (diarized)" : ""}`);
+  log.info("whisply", `transcribing ${label} (lang=${cfg.language})${diarize ? " (diarized)" : ""}`);
 
   // Redirect whisply's stdout+stderr straight to a per-job log file (like the recorder
   // does for ffmpeg). Piping without draining risks the child blocking on a full pipe

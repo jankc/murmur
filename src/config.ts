@@ -139,7 +139,7 @@ export function loadConfig(): Config {
     port: num("MEETING_AI_PORT", 7461),
     whisplyBin,
     whisplyModel: pick("WHISPLY_MODEL", "large-v3-turbo"),
-    language: pick("WHISPLY_LANG", "cs"),
+    language: pick("WHISPLY_LANG", "auto"), // "auto" = let whisply detect; forcing a wrong language drops that speech
     device: pick("WHISPLY_DEVICE", "mlx"),
     diarize: truthy(pick("DIARIZE", "0")),
     hfToken: pick("HF_TOKEN", ""),

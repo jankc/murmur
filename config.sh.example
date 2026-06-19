@@ -9,7 +9,9 @@ export MODEL_SUMMARY="gemma4:26b-mlx"
 # export MEETING_AI_PORT=7461                  # localhost control API port
 # export WHISPLY_BIN="$HOME/.local/bin/whisply"
 # export WHISPLY_MODEL="large-v3-turbo"
-# export WHISPLY_LANG="cs"                     # keep set so output filenames are deterministic
+# export WHISPLY_LANG="auto"                   # auto-detect per recording; set "cs"/"en"/… to force.
+#                                              # Forcing a language drops speech in OTHER languages —
+#                                              # leave on auto for bilingual (e.g. cs+en) meetings.
 # export WHISPLY_DEVICE="mlx"                  # mlx | gpu | cpu | auto
 
 # --- Diarization (optional, OFF by default) ---

@@ -42,7 +42,7 @@ export DIARIZE=1                    # speaker labels (see Diarization below)
 # HF_TOKEN for diarization — set directly, or source a secrets manager, e.g.:
 [ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
 ```
-Defaults for everything else live in `src/config.ts` (port 7461, whisply model `large-v3-turbo`, language `cs`, device `mlx`, `MAX_DURATION_SECONDS=7200`, …).
+Defaults for everything else live in `src/config.ts` (port 7461, whisply model `large-v3-turbo`, language `auto`-detect, device `mlx`, `MAX_DURATION_SECONDS=7200`, …).
 
 ## Usage — the `murmur` CLI
 
