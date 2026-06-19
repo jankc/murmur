@@ -18,9 +18,8 @@ export interface Paths {
   logsDir: string;
   stateDir: string;
   scratchRoot: string;
-  // Existing recording state files (written by the recorder).
-  recordingPid: string;
-  currentRecordingTxt: string;
+  // Active-recording state (one JSON; may track >1 capture process — see recorder.ts).
+  recordingState: string;
   // Daemon state files.
   queueFile: string;
   pauseFile: string;
@@ -63,8 +62,7 @@ export function buildPaths(base: string): Paths {
     logsDir,
     stateDir,
     scratchRoot,
-    recordingPid: join(base, "recording.pid"),
-    currentRecordingTxt: join(base, "current-recording.txt"),
+    recordingState: join(stateDir, "recording.json"),
     queueFile: join(stateDir, "queue.json"),
     pauseFile: join(stateDir, "pause.json"),
     currentFile: join(stateDir, "current.json"),

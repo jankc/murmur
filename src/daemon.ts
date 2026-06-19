@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { Config } from "./config.ts";
 import { Queue } from "./queue.ts";
 import { PauseStore } from "./jobstate.ts";
-import { FfmpegRecorder } from "./recorder.ts";
+import { MeetingRecorder } from "./recorder.ts";
 import { Worker } from "./worker.ts";
 import { startControl } from "./control.ts";
 import { startWatcher } from "./watcher.ts";
@@ -39,7 +39,7 @@ export async function runDaemon(cfg: Config): Promise<void> {
   // 4. Construct + wire modules.
   const queue = await Queue.load(cfg);
   const pause = await PauseStore.load(cfg);
-  const recorder = new FfmpegRecorder(cfg);
+  const recorder = new MeetingRecorder(cfg);
   const worker = new Worker(cfg, queue, recorder, pause);
 
   const server = startControl({ cfg, worker, queue, recorder, pause });
@@ -57,8 +57,9 @@ export async function runDaemon(cfg: Config): Promise<void> {
   // Move recordings that finished without an explicit stop (MAX_DURATION cap / crash)
   // from .partial/ into inbox/. Run once at boot, then poll — the watcher only sees
   // inbox/, so these stragglers need a nudge. (Normal stop() finalizes immediately.)
-  recorder.finalizeOrphans();
-  const finalizeTimer = setInterval(() => recorder.finalizeOrphans(), 10_000);
+  const sweepOrphans = () => void recorder.finalizeOrphans().catch((e) => log.warn("daemon", `finalize: ${String(e)}`));
+  sweepOrphans();
+  const finalizeTimer = setInterval(sweepOrphans, 10_000);
 
   // 5. Graceful shutdown.
   let shuttingDown = false;
@@ -105,7 +106,11 @@ async function selfCheck(cfg: Config): Promise<void> {
   log.info("daemon", `whisply: ${cfg.whisplyBin} (${(await Bun.file(cfg.whisplyBin).exists()) ? "found" : "MISSING"})`);
   log.info("daemon", `whisply model=${cfg.whisplyModel} lang=${cfg.language} device=${cfg.device} diarize=${cfg.diarize && !!cfg.hfToken}`);
   log.info("daemon", `ollama: ${cfg.ollamaHost} model=${cfg.modelSummary}`);
-  log.info("daemon", `recorder device index=${cfg.recordDeviceIndex}`);
+  if (cfg.recordBackend === "audiotee") {
+    log.info("daemon", `recorder backend=audiotee bin=${cfg.audioteeBin} (${(await Bun.file(cfg.audioteeBin).exists()) ? "found" : "MISSING"}) mic=${cfg.micDevice}`);
+  } else {
+    log.info("daemon", `recorder backend=ffmpeg device index=${cfg.recordDeviceIndex}`);
+  }
   const ollamaUp = await fetch(`${cfg.ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) })
     .then((r) => r.ok)
     .catch(() => false);

@@ -2,7 +2,7 @@
 // GET /status, the CLI's offline `status`, and the SwiftBar renderer can't drift.
 import type { Config } from "./config.ts";
 import type { Recorder } from "./recorder.ts";
-import { FfmpegRecorder } from "./recorder.ts";
+import { MeetingRecorder } from "./recorder.ts";
 import { PauseStore, readCurrent, type PauseMode, type CurrentJob } from "./jobstate.ts";
 import { readJson } from "./state.ts";
 import type { QueueItem } from "./queue.ts";
@@ -35,7 +35,7 @@ export async function statusSnapshot(
 /** Build a snapshot purely from on-disk state — no running daemon required. Used by the
  *  CLI and SwiftBar, which talk to the same files the daemon writes. */
 export async function offlineSnapshot(cfg: Config): Promise<StatusSnapshot> {
-  const recorder = new FfmpegRecorder(cfg);
+  const recorder = new MeetingRecorder(cfg);
   const pause = await PauseStore.load(cfg);
   const queue = await readJson<{ items: QueueItem[] }>(cfg.paths.queueFile, { items: [] });
   return statusSnapshot(cfg, recorder, pause, queue.items);

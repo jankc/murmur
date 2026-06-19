@@ -25,11 +25,14 @@ export interface Config {
   // Obsidian vault archiving (optional — empty vaultRoot disables it)
   vaultRoot: string;
   vaultFolder: string;
-  // recording (ffmpeg from the Aggregate Device)
-  recordDeviceIndex: string;
+  // recording
+  recordBackend: "ffmpeg" | "audiotee"; // ffmpeg = avfoundation device; audiotee = system tap + mic
+  recordDeviceIndex: string; // ffmpeg backend: avfoundation index of the Aggregate Device
+  audioteeBin: string; // audiotee backend: path to the AudioTee binary
+  micDevice: string; // audiotee backend: avfoundation mic name/index to mix in
   maxDurationSeconds: number;
-  panFilter: string; // ffmpeg filter that downmixes the Aggregate Device to mono
-  silenceDb: number; // warn after stop if the recording's peak dBFS is at/below this
+  panFilter: string; // ffmpeg backend: filter that downmixes the Aggregate Device to mono
+  silenceDb: number; // warn after stop if a track's peak dBFS is at/below this
 
   // PATH handed to spawned children so ffmpeg/whisply/ollama/terminal-notifier resolve.
   childPath: string;
@@ -52,7 +55,10 @@ const KEYS = [
   "OLLAMA_HOST",
   "PROMPT_FILE",
   "MEETING_AI_CLEAN_SCRATCH",
+  "RECORD_BACKEND",
   "RECORD_DEVICE_INDEX",
+  "AUDIOTEE_BIN",
+  "RECORD_MIC_DEVICE",
   "MAX_DURATION_SECONDS",
   "RECORD_PAN_FILTER",
   "RECORD_SILENCE_DB",
@@ -137,7 +143,10 @@ export function loadConfig(): Config {
     promptFile: pick("PROMPT_FILE", join(REPO_DIR, "prompts/summary.md")),
     vaultRoot: pick("OBSIDIAN_VAULT", ""),
     vaultFolder: pick("VAULT_FOLDER", "Murmur"),
+    recordBackend: pick("RECORD_BACKEND", "ffmpeg") === "audiotee" ? "audiotee" : "ffmpeg",
     recordDeviceIndex: pick("RECORD_DEVICE_INDEX", "0"),
+    audioteeBin: pick("AUDIOTEE_BIN", join(home, ".local/bin/audiotee")),
+    micDevice: pick("RECORD_MIC_DEVICE", "MacBook Pro Microphone"),
     maxDurationSeconds: num("MAX_DURATION_SECONDS", 7200),
     panFilter: pick("RECORD_PAN_FILTER", DEFAULT_PAN_FILTER),
     silenceDb: num("RECORD_SILENCE_DB", -80),

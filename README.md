@@ -95,6 +95,29 @@ ln -s "$PWD/swiftbar/murmur.5s.sh" "$HOME/Library/Application Support/SwiftBar/P
 ```
 (If a stale `murmur.5s.sh` dir/file is already there, `rm -rf` it first.) Shows `🔴` recording / `⚪` idle / `⏸` paused plus the queue depth, with menu actions (start/stop recording, pause/resume). The plugin just calls `murmur swiftbar`, which renders from on-disk state and **works whether or not the daemon is running** — so it reflects a `murmur record` you started directly. Menu clicks run `murmur` too, so they also work in both modes.
 
+## Recording backends
+
+Set `RECORD_BACKEND` in `config.sh` to choose how audio is captured:
+
+**`ffmpeg`** (default) — records one avfoundation **Aggregate Device** (mic + system audio via BlackHole) through the `pan=` downmix. Simple, but on macOS a meeting app (Teams/Zoom) that grabs the microphone with voice-processing can starve the whole aggregate, and routing system audio needs a BlackHole multi-output device (which disables the macOS volume keys). Tune with `RECORD_DEVICE_INDEX` / `RECORD_PAN_FILTER`.
+
+**`audiotee`** — captures the **system-audio mix** (the other participants) via [AudioTee](https://github.com/makeusabrew/audiotee)'s Core Audio tap, and your **microphone** via ffmpeg, then mixes the two into one mono WAV on `stop`. No BlackHole, no aggregate, no multi-output — you keep normal output + volume control, and a meeting app holding the mic can't disrupt the system capture (the tap is independent of the mic). The remote participants are captured reliably; your own voice comes from the separate mic track.
+
+Build AudioTee once (Swift, MIT, macOS 14.2+; first run prompts for Screen Recording permission):
+```sh
+git clone https://github.com/makeusabrew/audiotee && cd audiotee
+git checkout 56ac954                 # pin — its API is still evolving
+swift build -c release
+cp .build/release/audiotee ~/.local/bin/audiotee
+```
+Then in `config.sh`:
+```sh
+export RECORD_BACKEND=audiotee
+export RECORD_MIC_DEVICE="MacBook Pro Microphone"   # mic name or avfoundation index — pick one your meeting app isn't using
+# export AUDIOTEE_BIN="$HOME/.local/bin/audiotee"   # default
+```
+On `stop` murmur reports each track's level (`system` vs `mic`) and warns about a silent one, so a muted mic or a routing slip is pinpointed immediately; if one track is empty it falls back to the other.
+
 ## Diarization (speaker labels) — opt-in
 
 Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`, and accept the pyannote model conditions once on HuggingFace ([segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)). Transcripts then carry `[SPEAKER_xx]` labels + timestamps. If a diarized run fails (missing token, gated model), it automatically retries without diarization so you still get a transcript.
@@ -126,12 +149,12 @@ Archiving is idempotent (skips if a note with the same `YYYY-MM-DD HH-MM` prefix
 ## Notes
 
 - Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.
-- Recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
-- On `stop`, murmur measures the recording's peak level and warns (notification + log) if it's effectively silent — typically a routing slip (system output not set to the BlackHole multi-output device) or a muted mic. Tune the threshold with `RECORD_SILENCE_DB` (default `-80` dBFS).
+- **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
+- On `stop`, murmur measures the recording's level and warns (notification + log) if it's effectively silent — per-track for the `audiotee` backend (system vs mic), whole-file for `ffmpeg`. Usual causes: a routing slip (system output not on the BlackHole multi-output) or a muted/grabbed mic. Threshold: `RECORD_SILENCE_DB` (default `-80` dBFS).
 - whisply renames its input and writes a nested output dir, so murmur runs it against a hardlinked copy in `transcripts/.whisply-work/<base>/` and normalizes the result to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
-- Each pipeline stage streams to its own log under `logs/`: ffmpeg → `meeting-<ts>.log`, whisply → `whisply-<base>.log` (both stdout+stderr, so a failure's tail is preserved and a chatty child can never stall on a full pipe buffer).
+- Each pipeline stage streams to its own log under `logs/`: ffmpeg → `meeting-<ts>.log`, audiotee → `<base>.audiotee.log`, whisply → `whisply-<base>.log` (both stdout+stderr, so a failure's tail is preserved and a chatty child can never stall on a full pipe buffer).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
-- Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
+- Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
 - `config.sh` is the only shell file — it's just environment configuration (and a convenient hook for sourcing secrets). All logic is TypeScript in `src/`.
 
 ## Development

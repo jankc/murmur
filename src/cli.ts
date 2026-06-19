@@ -7,7 +7,7 @@ import { basename } from "node:path";
 import { readdirSync, statSync } from "node:fs";
 import { loadConfig, type Config } from "./config.ts";
 import { runDaemon } from "./daemon.ts";
-import { FfmpegRecorder } from "./recorder.ts";
+import { MeetingRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/whisply.ts";
 import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
@@ -90,7 +90,7 @@ switch (cmd) {
 
   case "record": {
     const dev = flag("--device") ?? flag("-d");
-    const recorder = new FfmpegRecorder(dev ? { ...cfg, recordDeviceIndex: dev } : cfg);
+    const recorder = new MeetingRecorder(dev ? { ...cfg, recordDeviceIndex: dev } : cfg);
     const r = await recorder.start();
     console.log(r.message);
     if (!r.ok) process.exit(1);
@@ -98,7 +98,7 @@ switch (cmd) {
   }
 
   case "stop": {
-    const r = await new FfmpegRecorder(cfg).stop();
+    const r = await new MeetingRecorder(cfg).stop();
     console.log(r.message);
     break;
   }
