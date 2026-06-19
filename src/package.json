@@ -1,0 +1,19 @@
+{
+  "name": "murmur",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "murmur — local meeting recorder, transcriber (mlx-whisper + pyannote), and summarizer (ollama) for macOS. A Bun CLI + orchestrator daemon (watcher, GPU-pause queue, control API).",
+  "bin": {
+    "murmur": "./cli.ts"
+  },
+  "scripts": {
+    "daemon": "bun run main.ts",
+    "murmur": "bun run cli.ts",
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}

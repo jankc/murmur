@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jank.murmur.daemon</string>
+
+  <!-- Absolute path to bun (mise install). If you reinstall/upgrade bun, update this. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/jank/.local/share/mise/installs/bun/latest/bin/bun</string>
+    <string>run</string>
+    <string>/Users/jank/dev/personal/murmur/src/main.ts</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/jank/dev/personal/murmur/src</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- The daemon also prepends these to the PATH it hands children, but set a sane
+       PATH so bun + python (asr venv) + ffmpeg + ollama + terminal-notifier all resolve. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/jank/.local/share/mise/installs/bun/latest/bin:/Users/jank/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/jank/Recordings/Meetings/logs/daemon.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/jank/Recordings/Meetings/logs/daemon.err.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
