@@ -1,7 +1,7 @@
 // The serial GPU worker — exactly one transcribe+summarize job at a time.
-// Honors soft/hard pause, auto-defers while a recording is in progress, is
-// idempotent (skips already-produced transcript/summary), and uses peek-then-commit
-// so a crash mid-job replays cleanly on restart.
+// Honors soft/hard pause, auto-defers while a recording is in progress, processes each job
+// unconditionally (location is the state — re-dropping a wav into inbox/ reprocesses it,
+// overwriting outputs), and uses peek-then-commit so a crash mid-job replays cleanly.
 import type { Config } from "./config.ts";
 import type { Queue, QueueItem } from "./queue.ts";
 import { move } from "./recordings.ts";
@@ -69,7 +69,7 @@ export class Worker {
   }
 
   /** On startup, clear any stale current-job marker; the job itself is still queued
-   *  (peek-then-commit) and will be retried, with idempotency skipping done stages. */
+   *  (peek-then-commit) and will be retried — it just reruns from the top, overwriting outputs. */
   private async recover(): Promise<void> {
     const cur = await readCurrent(this.cfg);
     if (cur) {
