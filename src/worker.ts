@@ -7,7 +7,7 @@ import type { Queue, QueueItem } from "./queue.ts";
 import { move } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
 import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
-import { transcribe } from "./engines/whisply.ts";
+import { transcribe } from "./engines/asr.ts";
 import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { EngineError, isAbort } from "./engines/errors.ts";

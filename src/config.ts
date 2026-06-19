@@ -10,17 +10,14 @@ export interface Config {
   meetingsBase: string;
   paths: Paths;
   port: number;
-  // whisply (transcription)
-  whisplyBin: string;
-  whisplyModel: string;
+  // ASR — transcription (mlx-whisper) + optional diarization (pyannote community-1),
+  // both run by asr/asr.py in one venv.
+  pythonBin: string; // python of the asr venv
+  asrModel: string; // mlx-whisper model (hf repo)
   language: string;
-  device: string;
   diarize: boolean;
-  diarizeBackend: "whisply" | "community1"; // whisply = pyannote 3.1 inline; community1 = pyannote 4 helper
-  diarizePython: string; // python of the pyannote-4 venv (community1 backend)
   numSpeakers: number; // hint for diarization; 0 = auto-detect
   hfToken: string;
-  cleanScratch: boolean;
   // ollama (summarization)
   ollamaHost: string;
   modelSummary: string;
@@ -38,7 +35,7 @@ export interface Config {
   panFilter: string; // ffmpeg backend: filter that downmixes the Aggregate Device to mono
   silenceDb: number; // warn after stop if a track's peak dBFS is at/below this
 
-  // PATH handed to spawned children so ffmpeg/whisply/ollama/terminal-notifier resolve.
+  // PATH handed to spawned children so ffmpeg/python/ollama/terminal-notifier resolve.
   childPath: string;
 }
 
@@ -50,18 +47,14 @@ const KEYS = [
   "MEETINGS_BASE",
   "MODEL_SUMMARY",
   "MEETING_AI_PORT",
-  "WHISPLY_BIN",
-  "WHISPLY_MODEL",
-  "WHISPLY_LANG",
-  "WHISPLY_DEVICE",
+  "MURMUR_PYTHON",
+  "ASR_MODEL",
+  "ASR_LANG",
   "DIARIZE",
-  "DIARIZE_BACKEND",
-  "DIARIZE_PYTHON",
   "DIARIZE_NUM_SPEAKERS",
   "HF_TOKEN",
   "OLLAMA_HOST",
   "PROMPT_FILE",
-  "MEETING_AI_CLEAN_SCRATCH",
   "RECORD_BACKEND",
   "RECORD_DEVICE_INDEX",
   "AUDIOTEE_BIN",
@@ -105,13 +98,13 @@ function sourceConfigSh(): RawEnv {
   return raw;
 }
 
-function buildChildPath(whisplyBin: string): string {
+function buildChildPath(pythonBin: string): string {
   const home = process.env.HOME ?? "";
   const wanted = [
-    dirname(whisplyBin),
     "/opt/homebrew/bin",
     "/usr/local/bin",
     home ? join(home, ".local/bin") : "",
+    dirname(pythonBin),
     "/usr/bin",
     "/bin",
     "/usr/sbin",
@@ -129,7 +122,7 @@ export function loadConfig(): Config {
 
   const home = process.env.HOME ?? "";
   const meetingsBase = pick("MEETINGS_BASE", join(home, "Recordings/Meetings"));
-  const whisplyBin = pick("WHISPLY_BIN", join(home, ".local/bin/whisply"));
+  const pythonBin = pick("MURMUR_PYTHON", join(home, ".local/share/murmur/asr-venv/bin/python"));
   // Numeric config with a guard: a non-numeric value falls back (with a warning) rather
   // than silently becoming NaN (which would, e.g., break the control-API port bind).
   const num = (key: (typeof KEYS)[number], fallback: number): number => {
@@ -143,16 +136,12 @@ export function loadConfig(): Config {
     meetingsBase,
     paths: buildPaths(meetingsBase),
     port: num("MEETING_AI_PORT", 7461),
-    whisplyBin,
-    whisplyModel: pick("WHISPLY_MODEL", "large-v3-turbo"),
-    language: pick("WHISPLY_LANG", "auto"), // "auto" = let whisply detect; forcing a wrong language drops that speech
-    device: pick("WHISPLY_DEVICE", "mlx"),
+    pythonBin,
+    asrModel: pick("ASR_MODEL", "mlx-community/whisper-large-v3-turbo"),
+    language: pick("ASR_LANG", "auto"), // "auto" = let whisper detect; forcing a wrong language drops that speech
     diarize: truthy(pick("DIARIZE", "0")),
-    diarizeBackend: pick("DIARIZE_BACKEND", "whisply") === "community1" ? "community1" : "whisply",
-    diarizePython: pick("DIARIZE_PYTHON", join(home, ".local/share/murmur/diarize-venv/bin/python")),
     numSpeakers: num("DIARIZE_NUM_SPEAKERS", 0),
     hfToken: pick("HF_TOKEN", ""),
-    cleanScratch: truthy(pick("MEETING_AI_CLEAN_SCRATCH", "1")),
     ollamaHost: pick("OLLAMA_HOST", "http://localhost:11434"),
     modelSummary: pick("MODEL_SUMMARY", "gemma4:26b-mlx"),
     promptFile: pick("PROMPT_FILE", join(REPO_DIR, "prompts/summary.md")),
@@ -166,11 +155,11 @@ export function loadConfig(): Config {
     maxDurationSeconds: num("MAX_DURATION_SECONDS", 7200),
     panFilter: pick("RECORD_PAN_FILTER", DEFAULT_PAN_FILTER),
     silenceDb: num("RECORD_SILENCE_DB", -80),
-    childPath: buildChildPath(whisplyBin),
+    childPath: buildChildPath(pythonBin),
   };
 
   if (cfg.diarize && !cfg.hfToken) {
-    log.warn("config", "DIARIZE=1 but HF_TOKEN is empty — diarization disabled (running whisply without --annotate)");
+    log.warn("config", "DIARIZE=1 but HF_TOKEN is empty — diarization disabled (plain transcript)");
   }
   return Object.freeze(cfg);
 }

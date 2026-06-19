@@ -22,7 +22,6 @@ export async function runDaemon(cfg: Config): Promise<void> {
     cfg.paths.summariesDir,
     cfg.paths.logsDir,
     cfg.paths.stateDir,
-    cfg.paths.scratchRoot,
   ]) {
     await mkdir(dir, { recursive: true });
   }
@@ -103,11 +102,8 @@ async function acquireLock(cfg: Config): Promise<boolean> {
 }
 
 async function selfCheck(cfg: Config): Promise<void> {
-  log.info("daemon", `whisply: ${cfg.whisplyBin} (${(await Bun.file(cfg.whisplyBin).exists()) ? "found" : "MISSING"})`);
-  log.info("daemon", `whisply model=${cfg.whisplyModel} lang=${cfg.language} device=${cfg.device} diarize=${cfg.diarize && !!cfg.hfToken}`);
-  if (cfg.diarize && !!cfg.hfToken && cfg.diarizeBackend === "community1") {
-    log.info("daemon", `diarize backend=community1 python=${cfg.diarizePython} (${(await Bun.file(cfg.diarizePython).exists()) ? "found" : "MISSING"})${cfg.numSpeakers ? ` num_speakers=${cfg.numSpeakers}` : ""}`);
-  }
+  const diarize = cfg.diarize && !!cfg.hfToken;
+  log.info("daemon", `asr model=${cfg.asrModel} lang=${cfg.language} python=${cfg.pythonBin} (${(await Bun.file(cfg.pythonBin).exists()) ? "found" : "MISSING"}) diarize=${diarize}${diarize && cfg.numSpeakers ? ` num_speakers=${cfg.numSpeakers}` : ""}`);
   log.info("daemon", `ollama: ${cfg.ollamaHost} model=${cfg.modelSummary}`);
   if (cfg.recordBackend === "ownscribe") {
     log.info("daemon", `recorder backend=ownscribe bin=${cfg.ownscribeBin} (${(await Bun.file(cfg.ownscribeBin).exists()) ? "found" : "MISSING"})`);

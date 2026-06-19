@@ -5,27 +5,22 @@
 export MEETINGS_BASE="$HOME/Recordings/Meetings"
 export MODEL_SUMMARY="gemma4:26b-mlx"
 
-# --- Daemon / whisply (optional) ---
+# --- Daemon / ASR (optional) ---
 # export MEETING_AI_PORT=7461                  # localhost control API port
-# export WHISPLY_BIN="$HOME/.local/bin/whisply"
-# export WHISPLY_MODEL="large-v3-turbo"
-# export WHISPLY_LANG="auto"                   # auto-detect per recording; set "cs"/"en"/… to force.
+# export ASR_MODEL="mlx-community/whisper-large-v3-turbo"   # mlx-whisper model (hf repo)
+# export ASR_LANG="auto"                       # auto-detect per recording; set "cs"/"en"/… to force.
 #                                              # Forcing a language drops speech in OTHER languages —
 #                                              # leave on auto for bilingual (e.g. cs+en) meetings.
-# export WHISPLY_DEVICE="mlx"                  # mlx | gpu | cpu | auto
+# export MURMUR_PYTHON="$HOME/.local/share/murmur/asr-venv/bin/python"   # asr venv python (default)
 
 # --- Diarization (speaker labels, optional, OFF by default) ---
-# Requires a HuggingFace token. See README → Diarization for the two backends.
+# Requires a HuggingFace token + accepting the community-1 model terms. The ASR venv
+# (see README → Install) already has pyannote.audio — no separate environment.
 # export DIARIZE=1
 # export HF_TOKEN="hf_xxx"
 # Or feed the secret to the launchd daemon (no shell env) without storing it here:
 #   [ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
-#
-# Backend: "community1" (pyannote 4 helper, best quality — needs the venv setup in the
-# README + accepting the community-1 model terms) or "whisply" (default, inline 3.1).
-# export DIARIZE_BACKEND=community1
 # export DIARIZE_NUM_SPEAKERS=0                 # speaker-count hint; 0 = auto-detect
-# export DIARIZE_PYTHON="$HOME/.local/share/murmur/diarize-venv/bin/python"  # default
 
 # --- Obsidian vault archiving (optional, OFF unless OBSIDIAN_VAULT is set) ---
 # Copies each finished summary into the vault as

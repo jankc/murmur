@@ -8,7 +8,7 @@ import { readdirSync, statSync } from "node:fs";
 import { loadConfig, type Config } from "./config.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
-import { transcribe } from "./engines/whisply.ts";
+import { transcribe } from "./engines/asr.ts";
 import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";

@@ -1,6 +1,6 @@
-// Tests for the chunk↔turn merge — the deterministic core of community1 diarization.
+// Tests for the chunk↔turn merge — the deterministic core of diarization.
 import { test, expect, describe } from "bun:test";
-import { assignSpeakers, type Chunk, type Turn } from "./engines/diarize.ts";
+import { assignSpeakers, type Chunk, type Turn } from "./engines/asr.ts";
 
 const chunk = (start: number, end: number, text: string): Chunk => ({ start, end, text });
 const turn = (start: number, end: number, speaker: string): Turn => ({ start, end, speaker });

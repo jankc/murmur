@@ -17,7 +17,6 @@ export interface Paths {
   summariesDir: string;
   logsDir: string;
   stateDir: string;
-  scratchRoot: string;
   // Active-recording state (one JSON; may track >1 capture process — see recorder.ts).
   recordingState: string;
   // Daemon state files.
@@ -33,7 +32,6 @@ export interface Paths {
   failedWav: (basename: string) => string;
   transcript: (basename: string) => string;
   summary: (basename: string) => string;
-  scratchDir: (basename: string) => string;
 }
 
 export function buildPaths(base: string): Paths {
@@ -46,9 +44,6 @@ export function buildPaths(base: string): Paths {
   const summariesDir = join(base, "summaries");
   const logsDir = join(base, "logs");
   const stateDir = join(base, "state");
-  // whisply scratch lives *inside* transcripts/ but in a dot-dir so it never collides
-  // with the flat <base>.txt namespace that idempotency relies on.
-  const scratchRoot = join(transcriptsDir, ".whisply-work");
 
   return Object.freeze({
     base,
@@ -61,7 +56,6 @@ export function buildPaths(base: string): Paths {
     summariesDir,
     logsDir,
     stateDir,
-    scratchRoot,
     recordingState: join(stateDir, "recording.json"),
     queueFile: join(stateDir, "queue.json"),
     pauseFile: join(stateDir, "pause.json"),
@@ -74,6 +68,5 @@ export function buildPaths(base: string): Paths {
     failedWav: (b: string) => join(failedDir, `${b}.wav`),
     transcript: (b: string) => join(transcriptsDir, `${b}.txt`),
     summary: (b: string) => join(summariesDir, `${b}.md`),
-    scratchDir: (b: string) => join(scratchRoot, b),
   });
 }

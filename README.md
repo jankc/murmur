@@ -1,11 +1,11 @@
 # murmur
 
-Local meeting recorder, transcriber, and summarizer for macOS. Records an Aggregate Device with `ffmpeg`, transcribes with `whisply` (mlx-whisper + optional speaker diarization), and summarizes with a local LLM via `ollama`. Everything runs locally — no cloud, no third parties.
+Local meeting recorder, transcriber, and summarizer for macOS. Records an Aggregate Device with `ffmpeg`, transcribes with `mlx-whisper` (+ optional `pyannote` speaker diarization), and summarizes with a local LLM via `ollama`. Everything runs locally — no cloud, no third parties.
 
 One stack: a single [Bun](https://bun.sh)/TypeScript codebase in `src/` provides both the **`murmur` CLI** (manual control) and a long-lived **daemon** (automatic, GPU-pause-aware processing). They share the same modules, so every step has one implementation.
 
 ```
-record (ffmpeg) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ whisply (mlx + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
+record (ffmpeg) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ asr (mlx-whisper + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
                                             └ daemon: watch inbox · serial queue · GPU-pause · auto-defer
                        on success the wav moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
 ```
@@ -17,8 +17,14 @@ record (ffmpeg) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ whisply 
 ```sh
 brew install ffmpeg ollama terminal-notifier      # terminal-notifier optional (notifications)
 # Bun — via mise, or: curl -fsSL https://bun.sh/install | bash
-uv tool install whisply                            # transcription engine (bundles mlx-whisper on Apple Silicon)
 ollama pull gemma4:26b-mlx                          # or whatever you set as MODEL_SUMMARY
+```
+
+The ASR engine (transcription + optional diarization) runs in one Python venv with both
+`mlx-whisper` and `pyannote.audio` 4 — `asr/asr.py` calls them directly:
+```sh
+uv venv --python 3.12 ~/.local/share/murmur/asr-venv
+uv pip install --python ~/.local/share/murmur/asr-venv/bin/python mlx-whisper "pyannote.audio>=4.0"
 ```
 
 Put `murmur` on your PATH (the CLI is an executable Bun script — no build/install step):
@@ -42,7 +48,7 @@ export DIARIZE=1                    # speaker labels (see Diarization below)
 # HF_TOKEN for diarization — set directly, or source a secrets manager, e.g.:
 [ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
 ```
-Defaults for everything else live in `src/config.ts` (port 7461, whisply model `large-v3-turbo`, language `auto`-detect, device `mlx`, `MAX_DURATION_SECONDS=7200`, …).
+Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-community/whisper-large-v3-turbo`, language `auto`-detect, `MAX_DURATION_SECONDS=7200`, …).
 
 ## Usage — the `murmur` CLI
 
@@ -71,7 +77,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jank.meeting-ai.daem
 launchctl kickstart -k gui/$(id -u)/com.jank.meeting-ai.daemon
 tail -f ~/Recordings/Meetings/logs/daemon.{out,err}.log
 ```
-After editing the plist, `bootout` then `bootstrap` again (`kickstart` alone won't re-read it). The plist hard-codes the absolute `bun` path (a mise install) and a `PATH` that resolves `bun`/`whisply`/`ffmpeg`/`ollama`/`terminal-notifier` — update it if you reinstall bun.
+After editing the plist, `bootout` then `bootstrap` again (`kickstart` alone won't re-read it). The plist hard-codes the absolute `bun` path (a mise install) and a `PATH` that resolves `bun`/`ffmpeg`/`ollama`/`terminal-notifier` — update it if you reinstall bun.
 
 > If you ran an older `fswatch` watch agent, stop it so the two don't double-process:
 > `launchctl bootout gui/$(id -u)/com.jank.meeting-ai.watch`
@@ -117,23 +123,14 @@ export RECORD_BACKEND=ownscribe
 
 ## Diarization (speaker labels) — opt-in
 
-Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`. Transcripts then carry `[SPEAKER_xx]` labels + timestamps. Two backends (`DIARIZE_BACKEND`):
+Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`. Transcripts then carry `[SPEAKER_xx]` labels + timestamps, produced by [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (pyannote.audio 4) in the same `asr/asr.py` helper that does the transcription: mlx-whisper emits the chunks, community-1 emits the speaker turns, and murmur merges them by timestamp — grouping consecutive same-speaker chunks. It tracks whole turns instead of flip-flopping mid-sentence on a mono meeting mix.
 
-**`community1`** (recommended) — [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (pyannote.audio 4). whisply transcribes only; a small helper (`diarize/diarize.py`) produces the speaker turns and murmur merges them by timestamp, grouping consecutive same-speaker chunks. Far better turn attribution than 3.1 — it tracks whole turns instead of flip-flopping mid-sentence on a mono meeting mix. Needs a one-time setup (its own venv, since whisply pins the older pyannote):
-```sh
-uv venv --python 3.12 ~/.local/share/murmur/diarize-venv
-uv pip install --python ~/.local/share/murmur/diarize-venv/bin/python "pyannote.audio>=4.0"
-```
-Accept the [community-1](https://hf.co/pyannote/speaker-diarization-community-1) conditions on HuggingFace once, then:
+The model is gated: accept the [community-1](https://hf.co/pyannote/speaker-diarization-community-1) conditions on HuggingFace once, then:
 ```sh
 export DIARIZE=1
-export DIARIZE_BACKEND=community1
 # export DIARIZE_NUM_SPEAKERS=3     # optional hint when you know the headcount (0 = auto)
-# export DIARIZE_PYTHON="$HOME/.local/share/murmur/diarize-venv/bin/python"   # default
 ```
-If diarization fails (missing venv/token, gated model), the run degrades to a plain transcript rather than losing the meeting.
-
-**`whisply`** (default) — diarization inline via whisply's bundled pyannote 3.1. No extra setup, but lower-quality attribution; accept the [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) + [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) conditions on HuggingFace. A failed diarized run retries without diarization.
+The ASR venv (set up in **Install**) already has `pyannote.audio` — no separate environment. If diarization fails (missing token, gated model, MPS issue), the run degrades to a plain transcript rather than losing the meeting.
 
 ## Obsidian vault archiving (optional)
 
@@ -164,8 +161,8 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 - Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.
 - **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
 - On `stop`, murmur measures the recording's level and warns (notification + log) if it's effectively silent — per-track for the `audiotee` backend (system vs mic), whole-file for `ffmpeg`. Usual causes: a routing slip (system output not on the BlackHole multi-output) or a muted/grabbed mic. Threshold: `RECORD_SILENCE_DB` (default `-80` dBFS).
-- whisply renames its input and writes a nested output dir, so murmur runs it against a hardlinked copy in `transcripts/.whisply-work/<base>/` and normalizes the result to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
-- Each pipeline stage streams to its own log under `logs/`: ffmpeg → `meeting-<ts>.log`, audiotee → `<base>.audiotee.log`, whisply → `whisply-<base>.log` (both stdout+stderr, so a failure's tail is preserved and a chatty child can never stall on a full pipe buffer).
+- The `asr/asr.py` helper reads the wav read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
+- Each pipeline stage streams to its own log under `logs/`: ffmpeg → `meeting-<ts>.log`, audiotee → `<base>.audiotee.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
 - `config.sh` is the only shell file — it's just environment configuration (and a convenient hook for sourcing secrets). All logic is TypeScript in `src/`.
