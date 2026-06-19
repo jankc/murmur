@@ -46,7 +46,7 @@ const REPO_DIR = join(import.meta.dir, "..");
 const KEYS = [
   "MEETINGS_BASE",
   "MODEL_SUMMARY",
-  "MEETING_AI_PORT",
+  "MURMUR_PORT",
   "MURMUR_PYTHON",
   "ASR_MODEL",
   "ASR_LANG",
@@ -135,7 +135,7 @@ export function loadConfig(): Config {
     repoDir: REPO_DIR,
     meetingsBase,
     paths: buildPaths(meetingsBase),
-    port: num("MEETING_AI_PORT", 7461),
+    port: num("MURMUR_PORT", 7461),
     pythonBin,
     asrModel: pick("ASR_MODEL", "mlx-community/whisper-large-v3-turbo"),
     language: pick("ASR_LANG", "auto"), // "auto" = let whisper detect; forcing a wrong language drops that speech

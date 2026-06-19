@@ -5,7 +5,7 @@ import { log } from "./log.ts";
 
 export function notify(cfg: Config, message: string): void {
   try {
-    Bun.spawn(["terminal-notifier", "-title", "Meeting AI", "-message", message, "-sound", "default"], {
+    Bun.spawn(["terminal-notifier", "-title", "murmur", "-message", message, "-sound", "default"], {
       stdout: "ignore",
       stderr: "ignore",
       env: { ...process.env, PATH: cfg.childPath },

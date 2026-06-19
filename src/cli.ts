@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// murmur — unified CLI for meeting-ai. Shares the same modules as the daemon, so
+// murmur — the unified CLI. Shares the same modules as the daemon, so
 // there's a single implementation of every step. Stateful actions (record/process/
 // pause/status) talk to the daemon when it's running, and fall back to doing the work
 // directly when it isn't; one-shot transcribe/summarize always run inline.

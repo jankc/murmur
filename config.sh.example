@@ -6,7 +6,7 @@ export MEETINGS_BASE="$HOME/Recordings/Meetings"
 export MODEL_SUMMARY="gemma4:26b-mlx"
 
 # --- Daemon / ASR (optional) ---
-# export MEETING_AI_PORT=7461                  # localhost control API port
+# export MURMUR_PORT=7461                      # localhost control API port
 # export ASR_MODEL="mlx-community/whisper-large-v3-turbo"   # mlx-whisper model (hf repo)
 # export ASR_LANG="auto"                       # auto-detect per recording; set "cs"/"en"/… to force.
 #                                              # Forcing a language drops speech in OTHER languages —

@@ -15,10 +15,12 @@ record (ffmpeg) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ asr (mlx
 ## Install
 
 ```sh
-brew install ffmpeg ollama terminal-notifier      # terminal-notifier optional (notifications)
+brew install ffmpeg ollama uv terminal-notifier    # terminal-notifier optional (notifications)
 # Bun — via mise, or: curl -fsSL https://bun.sh/install | bash
+# uv  — via mise/brew (above), or: curl -fsSL https://astral.sh/uv/install.sh | sh   (drives the ASR venv)
 ollama pull gemma4:26b-mlx                          # or whatever you set as MODEL_SUMMARY
 ```
+`ffmpeg`, `ollama` + a pulled model, `bun`, and `uv` are required; `terminal-notifier` is optional. Building a Swift recording helper (`ownscribe`/`audiotee`, below) also needs the **Xcode Command Line Tools** (`xcode-select --install`).
 
 The ASR engine (transcription + optional diarization) runs in one Python venv with both
 `mlx-whisper` and `pyannote.audio` 4 — `asr/asr.py` calls them directly:
@@ -32,10 +34,13 @@ Put `murmur` on your PATH (the CLI is an executable Bun script — no build/inst
 ln -s "$PWD/src/cli.ts" ~/.local/bin/murmur
 ```
 
-Create an **Aggregate Device** (mic + system audio, e.g. via BlackHole) in *Audio MIDI Setup* and note its avfoundation audio index:
-```sh
-ffmpeg -f avfoundation -list_devices true -i ""
-```
+Set up audio capture (see [Recording backends](#recording-backends) for the trade-offs):
+- **`ownscribe`** (recommended) — build the Swift helper (steps under [Recording backends](#recording-backends)); needs no BlackHole or Aggregate Device, and keeps the volume keys working.
+- **`ffmpeg`** (default) — install BlackHole and create an **Aggregate Device** (mic + system audio) in *Audio MIDI Setup*, then note its avfoundation index for `RECORD_DEVICE_INDEX`:
+  ```sh
+  brew install blackhole-2ch
+  ffmpeg -f avfoundation -list_devices true -i ""
+  ```
 
 ## Configure
 
@@ -43,7 +48,8 @@ ffmpeg -f avfoundation -list_devices true -i ""
 ```sh
 export MEETINGS_BASE="$HOME/Recordings/Meetings"
 export MODEL_SUMMARY="gemma4:26b-mlx"
-export RECORD_DEVICE_INDEX=1        # avfoundation index of your Aggregate Device
+export RECORD_BACKEND=ownscribe     # recommended (see Recording backends); omit for the ffmpeg default
+# export RECORD_DEVICE_INDEX=1      # ffmpeg backend only: avfoundation index of your Aggregate Device
 export DIARIZE=1                    # speaker labels (see Diarization below)
 # HF_TOKEN for diarization — set directly, or source a secrets manager, e.g.:
 [ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
@@ -72,15 +78,12 @@ The daemon watches `recordings/inbox/` and runs each new `.wav` through the pipe
 
 Run it always-on via the LaunchAgent:
 ```sh
-cp launchd/com.jank.meeting-ai.daemon.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jank.meeting-ai.daemon.plist
-launchctl kickstart -k gui/$(id -u)/com.jank.meeting-ai.daemon
+cp launchd/com.jank.murmur.daemon.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jank.murmur.daemon.plist
+launchctl kickstart -k gui/$(id -u)/com.jank.murmur.daemon
 tail -f ~/Recordings/Meetings/logs/daemon.{out,err}.log
 ```
-After editing the plist, `bootout` then `bootstrap` again (`kickstart` alone won't re-read it). The plist hard-codes the absolute `bun` path (a mise install) and a `PATH` that resolves `bun`/`ffmpeg`/`ollama`/`terminal-notifier` — update it if you reinstall bun.
-
-> If you ran an older `fswatch` watch agent, stop it so the two don't double-process:
-> `launchctl bootout gui/$(id -u)/com.jank.meeting-ai.watch`
+After editing the plist, `bootout` then `bootstrap` again (`kickstart` alone won't re-read it). The plist hard-codes machine-specific absolute paths — the `bun` binary (a mise install), the repo's `src/main.ts`, the `WorkingDirectory`, the `StandardOut/ErrorPath` logs, and a `PATH` that resolves `bun`/`ffmpeg`/`ollama`/`terminal-notifier` — so **on a new machine (or a different username/repo location) rewrite all of these**, and update the `bun` path whenever you reinstall bun.
 
 ### Control API (`http://127.0.0.1:7461`)
 
@@ -107,7 +110,7 @@ Set `RECORD_BACKEND` in `config.sh`:
 
 **`ownscribe`** (recommended) — one helper captures system audio (ScreenCaptureKit) **and** your mic, then merges them **host-time-aligned** on stop. No BlackHole, no aggregate, no output routing → **the macOS volume keys keep working**; and because the two streams are time-synced, the mic's unavoidable speaker bleed reads as "emphasized voice," not an echo. Best for capturing both sides on speakers.
 
-Build the helper once ([ownscribe-audio](https://github.com/paberr/ownscribe), MIT, macOS 14.2+; first run prompts for Screen Recording permission):
+Build the helper once ([ownscribe-audio](https://github.com/paberr/ownscribe), MIT, macOS 14.2+; needs the Xcode Command Line Tools, `xcode-select --install`; first run prompts for Screen Recording permission):
 ```sh
 git clone https://github.com/paberr/ownscribe && cd ownscribe/swift
 bash build.sh && cp ../bin/ownscribe-audio ~/.local/bin/ownscribe-audio
