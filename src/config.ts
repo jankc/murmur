@@ -28,6 +28,9 @@ export interface Config {
   // recording (ffmpeg from the Aggregate Device)
   recordDeviceIndex: string;
   maxDurationSeconds: number;
+  panFilter: string; // ffmpeg filter that downmixes the Aggregate Device to mono
+  silenceDb: number; // warn after stop if the recording's peak dBFS is at/below this
+
   // PATH handed to spawned children so ffmpeg/whisply/ollama/terminal-notifier resolve.
   childPath: string;
 }
@@ -51,9 +54,20 @@ const KEYS = [
   "MEETING_AI_CLEAN_SCRATCH",
   "RECORD_DEVICE_INDEX",
   "MAX_DURATION_SECONDS",
+  "RECORD_PAN_FILTER",
+  "RECORD_SILENCE_DB",
   "OBSIDIAN_VAULT",
   "VAULT_FOLDER",
 ] as const;
+
+// Downmix the 3-channel Aggregate Device to mono for transcription. Channel layout (from
+// Audio MIDI Setup): c0+c1 = BlackHole 2ch (system audio — the other participants), c2 =
+// MacBook Pro Microphone (your own voice). The stereo system pair (0.35+0.35 ≈ 0.7 for
+// centred speech) is balanced against the single mono mic at 0.7, and alimiter prevents
+// clipping when both are loud. Override with RECORD_PAN_FILTER if your Aggregate Device
+// orders its sub-devices differently (the mic landing on a different channel is the usual
+// reason a capture comes out mute or lopsided).
+const DEFAULT_PAN_FILTER = "pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter";
 
 type RawEnv = Partial<Record<(typeof KEYS)[number], string>>;
 
@@ -125,6 +139,8 @@ export function loadConfig(): Config {
     vaultFolder: pick("VAULT_FOLDER", "Murmur"),
     recordDeviceIndex: pick("RECORD_DEVICE_INDEX", "0"),
     maxDurationSeconds: num("MAX_DURATION_SECONDS", 7200),
+    panFilter: pick("RECORD_PAN_FILTER", DEFAULT_PAN_FILTER),
+    silenceDb: num("RECORD_SILENCE_DB", -80),
     childPath: buildChildPath(whisplyBin),
   };
 

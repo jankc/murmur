@@ -34,6 +34,10 @@ export MODEL_SUMMARY="gemma4:26b-mlx"
 # recording. Find it with: ffmpeg -f avfoundation -list_devices true -i ""
 # export RECORD_DEVICE_INDEX=0
 # export MAX_DURATION_SECONDS=7200             # 2h hard cap
+# ffmpeg downmix to mono. Default layout: c0+c1 = BlackHole (system audio), c2 = mic.
+# Override if your Aggregate Device orders its sub-devices differently (a wrong map = mute capture).
+# export RECORD_PAN_FILTER="pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter"
+# export RECORD_SILENCE_DB=-80                 # warn on stop if peak dBFS is at/below this
 
 # --- Auto-record (v2, not yet implemented) ---
 # export AUTORECORD=0

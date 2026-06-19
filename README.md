@@ -126,7 +126,8 @@ Archiving is idempotent (skips if a note with the same `YYYY-MM-DD HH-MM` prefix
 ## Notes
 
 - Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.
-- The `pan=` filter in `src/recorder.ts` is tuned for a specific Aggregate Device channel layout (mic on c0/c1, system on c2); adjust if yours differs.
+- Recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
+- On `stop`, murmur measures the recording's peak level and warns (notification + log) if it's effectively silent — typically a routing slip (system output not set to the BlackHole multi-output device) or a muted mic. Tune the threshold with `RECORD_SILENCE_DB` (default `-80` dBFS).
 - whisply renames its input and writes a nested output dir, so murmur runs it against a hardlinked copy in `transcripts/.whisply-work/<base>/` and normalizes the result to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
 - Each pipeline stage streams to its own log under `logs/`: ffmpeg → `meeting-<ts>.log`, whisply → `whisply-<base>.log` (both stdout+stderr, so a failure's tail is preserved and a chatty child can never stall on a full pipe buffer).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.

@@ -17,9 +17,6 @@ import { notify } from "./notify.ts";
 import { sleep } from "./util.ts";
 import { log } from "./log.ts";
 
-// Tuned for the specific Aggregate Device channel layout (mic on c0/c1, system on c2).
-const PAN_FILTER = "pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter";
-
 export interface Recorder {
   isRecording(): boolean;
   currentFile(): string | null;
@@ -64,7 +61,7 @@ export class FfmpegRecorder implements Recorder {
     const args = [
       "-f", "avfoundation",
       "-i", `:${this.cfg.recordDeviceIndex}`,
-      "-filter_complex", PAN_FILTER,
+      "-filter_complex", this.cfg.panFilter,
       "-ac", "1",
       "-ar", "16000",
       "-c:a", "pcm_s16le",
@@ -116,7 +113,12 @@ export class FfmpegRecorder implements Recorder {
     const moved = this.finalizeOrphans();
     notify(this.cfg, "Meeting recording stopped");
     log.info("recorder", `stopped recording (pid ${pid})`);
-    return { ok: true, message: moved ? `recording stopped → ${moved}` : "recording stopped" };
+    let message = moved ? `recording stopped → ${moved}` : "recording stopped";
+    if (moved) {
+      const warning = await this.warnIfSilent(moved);
+      if (warning) message += `\n${warning}`;
+    }
+    return { ok: true, message };
   }
 
   /** Remove the recording state files once a recording has truly ended. Idempotent —
@@ -124,6 +126,23 @@ export class FfmpegRecorder implements Recorder {
   private clearRecordingState(): void {
     rmSync(this.cfg.paths.recordingPid, { force: true });
     rmSync(this.cfg.paths.currentRecordingTxt, { force: true });
+  }
+
+  /** Measure the finished recording's peak level and warn if it's effectively silent.
+   *  Catches a routing slip (system output not on the BlackHole multi-output) or a muted/
+   *  starved mic the moment you stop — instead of after a wasted transcription. Best-effort;
+   *  returns a human-readable warning string if silent, else null. */
+  private async warnIfSilent(wav: string): Promise<string | null> {
+    const peak = await measurePeakDb(this.cfg, wav);
+    if (peak === null) return null; // couldn't measure — don't false-alarm
+    if (peak > this.cfg.silenceDb) {
+      log.info("recorder", `recording level ok (peak ${peak} dBFS)`);
+      return null;
+    }
+    const msg = `⚠️ recording looks silent (peak ${peak} dBFS) — check system output is "Meeting Output" and the mic isn't muted`;
+    log.warn("recorder", msg);
+    notify(this.cfg, "Recording looks silent — check audio routing");
+    return msg;
   }
 
   /** Move any completed-but-unmoved recordings from .partial/ into inbox/. Called by
@@ -168,4 +187,22 @@ export class FfmpegRecorder implements Recorder {
 function stamp(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+}
+
+/** Peak volume of a WAV in dBFS, via ffmpeg's volumedetect. Returns null if it can't be
+ *  measured (file missing, ffmpeg error) so callers don't false-alarm. */
+export async function measurePeakDb(cfg: Config, wav: string): Promise<number | null> {
+  try {
+    if (!existsSync(wav)) return null;
+    const proc = Bun.spawn(
+      ["ffmpeg", "-hide_banner", "-nostats", "-i", wav, "-af", "volumedetect", "-f", "null", "-"],
+      { env: { ...process.env, PATH: cfg.childPath }, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+    );
+    const stderr = await new Response(proc.stderr).text();
+    await proc.exited;
+    const m = stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?) dB/);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
 }
