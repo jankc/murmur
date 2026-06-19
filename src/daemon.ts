@@ -106,7 +106,9 @@ async function selfCheck(cfg: Config): Promise<void> {
   log.info("daemon", `whisply: ${cfg.whisplyBin} (${(await Bun.file(cfg.whisplyBin).exists()) ? "found" : "MISSING"})`);
   log.info("daemon", `whisply model=${cfg.whisplyModel} lang=${cfg.language} device=${cfg.device} diarize=${cfg.diarize && !!cfg.hfToken}`);
   log.info("daemon", `ollama: ${cfg.ollamaHost} model=${cfg.modelSummary}`);
-  if (cfg.recordBackend === "audiotee") {
+  if (cfg.recordBackend === "ownscribe") {
+    log.info("daemon", `recorder backend=ownscribe bin=${cfg.ownscribeBin} (${(await Bun.file(cfg.ownscribeBin).exists()) ? "found" : "MISSING"})`);
+  } else if (cfg.recordBackend === "audiotee") {
     log.info("daemon", `recorder backend=audiotee bin=${cfg.audioteeBin} (${(await Bun.file(cfg.audioteeBin).exists()) ? "found" : "MISSING"}) mic=${cfg.micDevice}`);
   } else {
     log.info("daemon", `recorder backend=ffmpeg device index=${cfg.recordDeviceIndex}`);

@@ -26,10 +26,11 @@ export interface Config {
   vaultRoot: string;
   vaultFolder: string;
   // recording
-  recordBackend: "ffmpeg" | "audiotee"; // ffmpeg = avfoundation device; audiotee = system tap + mic
+  recordBackend: "ffmpeg" | "audiotee" | "ownscribe"; // see README → Recording backends
   recordDeviceIndex: string; // ffmpeg backend: avfoundation index of the Aggregate Device
   audioteeBin: string; // audiotee backend: path to the AudioTee binary
   micDevice: string; // audiotee backend: avfoundation mic name/index to mix in
+  ownscribeBin: string; // ownscribe backend: path to the ownscribe-audio binary (synced system+mic)
   maxDurationSeconds: number;
   panFilter: string; // ffmpeg backend: filter that downmixes the Aggregate Device to mono
   silenceDb: number; // warn after stop if a track's peak dBFS is at/below this
@@ -58,6 +59,7 @@ const KEYS = [
   "RECORD_BACKEND",
   "RECORD_DEVICE_INDEX",
   "AUDIOTEE_BIN",
+  "OWNSCRIBE_BIN",
   "RECORD_MIC_DEVICE",
   "MAX_DURATION_SECONDS",
   "RECORD_PAN_FILTER",
@@ -74,6 +76,10 @@ const KEYS = [
 // orders its sub-devices differently (the mic landing on a different channel is the usual
 // reason a capture comes out mute or lopsided).
 const DEFAULT_PAN_FILTER = "pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter";
+
+function pickBackend(v: string): Config["recordBackend"] {
+  return v === "audiotee" || v === "ownscribe" ? v : "ffmpeg";
+}
 
 type RawEnv = Partial<Record<(typeof KEYS)[number], string>>;
 
@@ -143,10 +149,11 @@ export function loadConfig(): Config {
     promptFile: pick("PROMPT_FILE", join(REPO_DIR, "prompts/summary.md")),
     vaultRoot: pick("OBSIDIAN_VAULT", ""),
     vaultFolder: pick("VAULT_FOLDER", "Murmur"),
-    recordBackend: pick("RECORD_BACKEND", "ffmpeg") === "audiotee" ? "audiotee" : "ffmpeg",
+    recordBackend: pickBackend(pick("RECORD_BACKEND", "ffmpeg")),
     recordDeviceIndex: pick("RECORD_DEVICE_INDEX", "0"),
     audioteeBin: pick("AUDIOTEE_BIN", join(home, ".local/bin/audiotee")),
     micDevice: pick("RECORD_MIC_DEVICE", "MacBook Pro Microphone"),
+    ownscribeBin: pick("OWNSCRIBE_BIN", join(home, ".local/bin/ownscribe-audio")),
     maxDurationSeconds: num("MAX_DURATION_SECONDS", 7200),
     panFilter: pick("RECORD_PAN_FILTER", DEFAULT_PAN_FILTER),
     silenceDb: num("RECORD_SILENCE_DB", -80),

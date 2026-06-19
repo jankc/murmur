@@ -97,26 +97,23 @@ ln -s "$PWD/swiftbar/murmur.5s.sh" "$HOME/Library/Application Support/SwiftBar/P
 
 ## Recording backends
 
-Set `RECORD_BACKEND` in `config.sh` to choose how audio is captured:
+Set `RECORD_BACKEND` in `config.sh`:
 
-**`ffmpeg`** (default) — records one avfoundation **Aggregate Device** (mic + system audio via BlackHole) through the `pan=` downmix. Simple, but on macOS a meeting app (Teams/Zoom) that grabs the microphone with voice-processing can starve the whole aggregate, and routing system audio needs a BlackHole multi-output device (which disables the macOS volume keys). Tune with `RECORD_DEVICE_INDEX` / `RECORD_PAN_FILTER`.
+**`ownscribe`** (recommended) — one helper captures system audio (ScreenCaptureKit) **and** your mic, then merges them **host-time-aligned** on stop. No BlackHole, no aggregate, no output routing → **the macOS volume keys keep working**; and because the two streams are time-synced, the mic's unavoidable speaker bleed reads as "emphasized voice," not an echo. Best for capturing both sides on speakers.
 
-**`audiotee`** — captures the **system-audio mix** (the other participants) via [AudioTee](https://github.com/makeusabrew/audiotee)'s Core Audio tap, and your **microphone** via ffmpeg, then mixes the two into one mono WAV on `stop`. No BlackHole, no aggregate, no multi-output — you keep normal output + volume control, and a meeting app holding the mic can't disrupt the system capture (the tap is independent of the mic). The remote participants are captured reliably; your own voice comes from the separate mic track.
-
-Build AudioTee once (Swift, MIT, macOS 14.2+; first run prompts for Screen Recording permission):
+Build the helper once ([ownscribe-audio](https://github.com/paberr/ownscribe), MIT, macOS 14.2+; first run prompts for Screen Recording permission):
 ```sh
-git clone https://github.com/makeusabrew/audiotee && cd audiotee
-git checkout 56ac954                 # pin — its API is still evolving
-swift build -c release
-cp .build/release/audiotee ~/.local/bin/audiotee
+git clone https://github.com/paberr/ownscribe && cd ownscribe/swift
+bash build.sh && cp ../bin/ownscribe-audio ~/.local/bin/ownscribe-audio
 ```
-Then in `config.sh`:
 ```sh
-export RECORD_BACKEND=audiotee
-export RECORD_MIC_DEVICE="MacBook Pro Microphone"   # mic name or avfoundation index — pick one your meeting app isn't using
-# export AUDIOTEE_BIN="$HOME/.local/bin/audiotee"   # default
+export RECORD_BACKEND=ownscribe
+# export OWNSCRIBE_BIN="$HOME/.local/bin/ownscribe-audio"   # default
 ```
-On `stop` murmur reports each track's level (`system` vs `mic`) and warns about a silent one, so a muted mic or a routing slip is pinpointed immediately; if one track is empty it falls back to the other.
+
+**`ffmpeg`** (default) — records one avfoundation **Aggregate Device** (mic + system audio via BlackHole) through the `pan=` downmix. One hardware clock, so it's perfectly synced — but routing system audio requires a BlackHole multi-output as the system output, which **disables the volume keys**, and a meeting app grabbing the mic can starve the aggregate. Tune with `RECORD_DEVICE_INDEX` / `RECORD_PAN_FILTER`.
+
+**`audiotee`** — like `ownscribe`, but the system tap ([AudioTee](https://github.com/makeusabrew/audiotee)) and the mic are two *independent* processes mixed on stop; without host-time alignment the mic's speaker bleed can echo on speakers. Kept as an option (fine on headphones) — prefer `ownscribe`. Build: `swift build -c release` in the AudioTee repo (pin `56ac954`) → `~/.local/bin/audiotee`; then `RECORD_BACKEND=audiotee` + `RECORD_MIC_DEVICE`.
 
 ## Diarization (speaker labels) — opt-in
 

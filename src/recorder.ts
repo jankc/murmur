@@ -35,7 +35,7 @@ interface RecordingPart {
   file: string;
 }
 interface RecordingState {
-  backend: "ffmpeg" | "audiotee";
+  backend: "ffmpeg" | "audiotee" | "ownscribe";
   base: string;
   startedAt: number;
   outWav: string; // final mono wav in .partial/ (after mix, for audiotee)
@@ -67,7 +67,10 @@ export class MeetingRecorder implements Recorder {
 
     let state: RecordingState;
     try {
-      state = this.cfg.recordBackend === "audiotee" ? this.startAudioTee(base, outWav) : this.startFfmpeg(base, outWav);
+      state =
+        this.cfg.recordBackend === "ownscribe" ? this.startOwnscribe(base, outWav)
+        : this.cfg.recordBackend === "audiotee" ? this.startAudioTee(base, outWav)
+        : this.startFfmpeg(base, outWav);
     } catch (err) {
       return { ok: false, message: `could not start recording: ${String(err)}` };
     }
@@ -126,6 +129,25 @@ export class MeetingRecorder implements Recorder {
     };
   }
 
+  /** ownscribe backend: one ownscribe-audio process captures system (ScreenCaptureKit) + mic
+   *  (AVFAudio) and, on stop, merges them host-time-aligned into one WAV. No output routing,
+   *  so volume keys keep working. It writes a 24 kHz mono float WAV; finalize transcodes it to
+   *  the 16 kHz mono s16le the pipeline expects. */
+  private startOwnscribe(base: string, outWav: string): RecordingState {
+    if (!existsSync(this.cfg.ownscribeBin)) {
+      throw new Error(`ownscribe-audio not found at ${this.cfg.ownscribeBin} — build it (see README → Recording backends)`);
+    }
+    const raw = join(this.cfg.paths.partialDir, `${base}.oa.wav`); // ownscribe's merged output (24 kHz float)
+    const logFd = openSync(join(this.cfg.paths.logsDir, `${base}.log`), "a");
+    const proc = Bun.spawn(
+      [this.cfg.ownscribeBin, "capture", "-o", raw, "--mic", "--capture-mode-all"],
+      { cwd: this.cfg.meetingsBase, env: { ...process.env, PATH: this.cfg.childPath }, stdin: "ignore", stdout: logFd, stderr: logFd },
+    );
+    proc.unref();
+    if (!proc.pid) throw new Error("ownscribe-audio failed to start");
+    return { backend: "ownscribe", base, startedAt: Date.now(), outWav, parts: [{ role: "main", pid: proc.pid, file: raw }] };
+  }
+
   async stop(): Promise<{ ok: boolean; message: string }> {
     const st = this.readState();
     if (!st) {
@@ -133,10 +155,12 @@ export class MeetingRecorder implements Recorder {
       return { ok: false, message: "not recording" };
     }
     // SIGINT lets ffmpeg finalize its WAV; audiotee shuts down gracefully on SIGTERM.
+    // ownscribe-audio merges its two tracks on SIGINT, which can take a few seconds — so wait
+    // generously (we break the instant it exits; only a truly hung process hits the cap).
     for (const p of st.parts) {
       try { process.kill(p.pid, p.role === "system" ? "SIGTERM" : "SIGINT"); } catch {}
     }
-    for (let i = 0; i < 50 && st.parts.some((p) => alive(p.pid)); i++) await sleep(100); // ~5s
+    for (let i = 0; i < 600 && st.parts.some((p) => alive(p.pid)); i++) await sleep(100); // ~60s cap
     for (const p of st.parts) if (alive(p.pid)) { try { process.kill(p.pid, "SIGKILL"); } catch {} }
 
     const moved = await this.finalizeState(st);
@@ -145,9 +169,9 @@ export class MeetingRecorder implements Recorder {
     log.info("recorder", `stopped recording [${st.backend}]`);
 
     let message = moved ? `recording stopped → ${moved}` : "recording stopped (no audio captured)";
-    // ffmpeg backend is a single mixed track → check the final file. audiotee reports per
-    // track during the mix (mic vs system), so it isn't re-checked here.
-    if (moved && st.backend === "ffmpeg") {
+    // ffmpeg/ownscribe produce a single merged track → check the final file. audiotee reports
+    // per track during its own mix (mic vs system), so it isn't re-checked here.
+    if (moved && st.backend !== "audiotee") {
       const peak = await measurePeakDb(this.cfg, moved);
       if (peak !== null && peak <= this.cfg.silenceDb) {
         const w = `⚠️ recording looks silent (peak ${peak} dBFS) — check audio routing / mic`;
@@ -185,6 +209,10 @@ export class MeetingRecorder implements Recorder {
    *  Returns the inbox path, or null if nothing usable was captured. */
   private async finalizeState(st: RecordingState): Promise<string | null> {
     if (st.backend === "audiotee" && !(await this.mixAudioTee(st))) {
+      this.cleanupTemps(st);
+      return null;
+    }
+    if (st.backend === "ownscribe" && !(await this.transcodeOwnscribe(st))) {
       this.cleanupTemps(st);
       return null;
     }
@@ -248,13 +276,34 @@ export class MeetingRecorder implements Recorder {
     return true;
   }
 
+  /** Transcode ownscribe-audio's merged 24 kHz mono float WAV to the 16 kHz mono s16le the
+   *  pipeline expects. Reports the level (the merge already synced system + mic). */
+  private async transcodeOwnscribe(st: RecordingState): Promise<boolean> {
+    const raw = st.parts[0]?.file;
+    if (!raw || !existsSync(raw) || statSync(raw).size === 0) {
+      log.warn("recorder", `${st.base}: no audio captured`);
+      return false;
+    }
+    const proc = Bun.spawn(
+      ["ffmpeg", "-hide_banner", "-nostats", "-y", "-i", raw, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", st.outWav],
+      { env: { ...process.env, PATH: this.cfg.childPath }, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
+    );
+    const code = await proc.exited;
+    if (code !== 0) {
+      log.error("recorder", `transcode failed for ${st.base}: ${(await new Response(proc.stderr).text()).slice(-400)}`);
+      return false;
+    }
+    return true;
+  }
+
   private moveStrayPartial(): string | null {
     const dir = this.cfg.paths.partialDir;
     if (!existsSync(dir)) return null;
     let last: string | null = null;
     for (const name of readdirSync(dir)) {
-      // Only the final mixed/recorded wav — never the audiotee temp tracks.
-      if (!name.endsWith(".wav") || name.endsWith(".mic.wav")) continue;
+      // Only a complete final recording (meeting-<stamp>.wav) — never the backends' temp
+      // tracks (.oa.wav, .mic.wav, .system.pcm, *.tmp.wav).
+      if (!/^meeting-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.wav$/.test(name)) continue;
       const src = join(dir, name);
       try {
         if (statSync(src).size === 0) continue;
@@ -274,6 +323,12 @@ export class MeetingRecorder implements Recorder {
     for (const p of st.parts) {
       if (p.file === st.outWav) continue; // ffmpeg backend wrote straight to outWav (already moved)
       try { if (existsSync(p.file)) unlinkSync(p.file); } catch {}
+      // ownscribe-audio's own temp tracks, in case it died before cleaning them up itself.
+      if (st.backend === "ownscribe") {
+        for (const suffix of [".sys.tmp.wav", ".mic.tmp.wav"]) {
+          try { if (existsSync(p.file + suffix)) unlinkSync(p.file + suffix); } catch {}
+        }
+      }
     }
   }
 
