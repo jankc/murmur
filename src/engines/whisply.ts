@@ -8,6 +8,7 @@ import { openSync, closeSync, readFileSync, writeSync, mkdirSync } from "node:fs
 import { join } from "node:path";
 import type { Config } from "../config.ts";
 import type { QueueItem } from "../queue.ts";
+import { diarizeTurns, assignSpeakers, type Chunk } from "./diarize.ts";
 import { log } from "../log.ts";
 import { AbortError, EngineError, isAbort } from "./errors.ts";
 
@@ -17,8 +18,14 @@ export async function transcribe(cfg: Config, job: QueueItem, signal: AbortSigna
   const wantDiarize = cfg.diarize && !!cfg.hfToken;
 
   await prepareScratch(scratch, localInput, job.wavPath);
+
+  // community1: whisply transcribes only, then the pyannote-4 helper diarizes and we merge.
+  if (wantDiarize && cfg.diarizeBackend === "community1") {
+    return await transcribeCommunity1(cfg, job, localInput, scratch, signal);
+  }
+
   try {
-    await runWhisply(cfg, job.basename, localInput, scratch, signal, wantDiarize);
+    await runWhisply(cfg, job.basename, localInput, scratch, signal, wantDiarize, "txt");
   } catch (err) {
     if (isAbort(err) || signal.aborted) throw err;
     if (wantDiarize) {
@@ -26,12 +33,59 @@ export async function transcribe(cfg: Config, job: QueueItem, signal: AbortSigna
       // models, MPS issues). Don't lose the transcript over it — retry plain.
       log.warn("whisply", `${job.basename}: diarized run failed (${(err as Error).message}); retrying without diarization`);
       await prepareScratch(scratch, localInput, job.wavPath); // whisply may have mutated localInput
-      await runWhisply(cfg, job.basename, localInput, scratch, signal, false);
+      await runWhisply(cfg, job.basename, localInput, scratch, signal, false, "txt");
     } else {
       throw err;
     }
   }
   return await locateAndNormalize(cfg, job.basename, scratch);
+}
+
+/** community1 diarization path: whisply emits JSON chunks (text + timestamps, no speakers),
+ *  the pyannote-4 helper emits speaker turns, and we merge by timestamp. Diarization failure
+ *  degrades to a plain transcript rather than losing the meeting. */
+async function transcribeCommunity1(cfg: Config, job: QueueItem, localInput: string, scratch: string, signal: AbortSignal): Promise<string> {
+  await runWhisply(cfg, job.basename, localInput, scratch, signal, false, "json");
+  const chunks = await parseChunks(scratch);
+  const dest = cfg.paths.transcript(job.basename);
+  await mkdir(cfg.paths.transcriptsDir, { recursive: true });
+
+  if (chunks.length === 0) {
+    log.warn("whisply", `${job.basename}: no transcript produced (no speech?) — writing empty transcript`);
+    await Bun.write(dest, "");
+  } else {
+    let text: string;
+    try {
+      const turns = await diarizeTurns(cfg, job.wavPath, signal);
+      text = assignSpeakers(chunks, turns);
+    } catch (err) {
+      if (isAbort(err) || signal.aborted) throw err;
+      log.warn("whisply", `${job.basename}: diarization failed (${(err as Error).message}); writing plain transcript`);
+      text = chunks.map((c) => c.text.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim() + "\n";
+    }
+    await Bun.write(dest, text);
+  }
+  if (cfg.cleanScratch) await rm(scratch, { recursive: true, force: true });
+  return dest;
+}
+
+/** Parse whisply's JSON export → transcription chunks (timestamp + text). */
+async function parseChunks(scratch: string): Promise<Chunk[]> {
+  let jsonFile: string | null = null;
+  const glob = new Bun.Glob("**/*.json");
+  for await (const f of glob.scan({ cwd: scratch, absolute: true })) { jsonFile = f; break; }
+  if (!jsonFile) return [];
+  const data = (await Bun.file(jsonFile).json()) as { transcription?: Record<string, { chunks?: Array<{ timestamp?: [number, number]; text?: string }> }> };
+  const lang = Object.keys(data.transcription ?? {})[0];
+  const chunks = (lang && data.transcription?.[lang]?.chunks) || [];
+  const out: Chunk[] = [];
+  for (const c of chunks) {
+    const start = typeof c.timestamp?.[0] === "number" ? c.timestamp[0] : 0;
+    const end = typeof c.timestamp?.[1] === "number" ? c.timestamp[1] : start;
+    const text = typeof c.text === "string" ? c.text : "";
+    if (text.trim()) out.push({ start, end, text });
+  }
+  return out;
 }
 
 /** Reset the scratch dir and link the input in under an already-sanitized name.
@@ -54,8 +108,9 @@ async function runWhisply(
   scratch: string,
   signal: AbortSignal,
   diarize: boolean,
+  exportFmt: "txt" | "json",
 ): Promise<void> {
-  const args = ["run", "-f", localInput, "-o", scratch, "-d", cfg.device, "-m", cfg.whisplyModel, "-e", "txt"];
+  const args = ["run", "-f", localInput, "-o", scratch, "-d", cfg.device, "-m", cfg.whisplyModel, "-e", exportFmt];
   // Only force a language when explicitly configured; "auto" (default) lets whisply detect
   // it. Forcing the wrong language makes whisper emit nothing for that speech (drops it).
   if (cfg.language && cfg.language !== "auto") args.push("-l", cfg.language);

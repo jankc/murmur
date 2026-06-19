@@ -16,6 +16,9 @@ export interface Config {
   language: string;
   device: string;
   diarize: boolean;
+  diarizeBackend: "whisply" | "community1"; // whisply = pyannote 3.1 inline; community1 = pyannote 4 helper
+  diarizePython: string; // python of the pyannote-4 venv (community1 backend)
+  numSpeakers: number; // hint for diarization; 0 = auto-detect
   hfToken: string;
   cleanScratch: boolean;
   // ollama (summarization)
@@ -52,6 +55,9 @@ const KEYS = [
   "WHISPLY_LANG",
   "WHISPLY_DEVICE",
   "DIARIZE",
+  "DIARIZE_BACKEND",
+  "DIARIZE_PYTHON",
+  "DIARIZE_NUM_SPEAKERS",
   "HF_TOKEN",
   "OLLAMA_HOST",
   "PROMPT_FILE",
@@ -142,6 +148,9 @@ export function loadConfig(): Config {
     language: pick("WHISPLY_LANG", "auto"), // "auto" = let whisply detect; forcing a wrong language drops that speech
     device: pick("WHISPLY_DEVICE", "mlx"),
     diarize: truthy(pick("DIARIZE", "0")),
+    diarizeBackend: pick("DIARIZE_BACKEND", "whisply") === "community1" ? "community1" : "whisply",
+    diarizePython: pick("DIARIZE_PYTHON", join(home, ".local/share/murmur/diarize-venv/bin/python")),
+    numSpeakers: num("DIARIZE_NUM_SPEAKERS", 0),
     hfToken: pick("HF_TOKEN", ""),
     cleanScratch: truthy(pick("MEETING_AI_CLEAN_SCRATCH", "1")),
     ollamaHost: pick("OLLAMA_HOST", "http://localhost:11434"),

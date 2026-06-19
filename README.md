@@ -117,7 +117,23 @@ export RECORD_BACKEND=ownscribe
 
 ## Diarization (speaker labels) — opt-in
 
-Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`, and accept the pyannote model conditions once on HuggingFace ([segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0), [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1)). Transcripts then carry `[SPEAKER_xx]` labels + timestamps. If a diarized run fails (missing token, gated model), it automatically retries without diarization so you still get a transcript.
+Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`. Transcripts then carry `[SPEAKER_xx]` labels + timestamps. Two backends (`DIARIZE_BACKEND`):
+
+**`community1`** (recommended) — [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (pyannote.audio 4). whisply transcribes only; a small helper (`diarize/diarize.py`) produces the speaker turns and murmur merges them by timestamp, grouping consecutive same-speaker chunks. Far better turn attribution than 3.1 — it tracks whole turns instead of flip-flopping mid-sentence on a mono meeting mix. Needs a one-time setup (its own venv, since whisply pins the older pyannote):
+```sh
+uv venv --python 3.12 ~/.local/share/murmur/diarize-venv
+uv pip install --python ~/.local/share/murmur/diarize-venv/bin/python "pyannote.audio>=4.0"
+```
+Accept the [community-1](https://hf.co/pyannote/speaker-diarization-community-1) conditions on HuggingFace once, then:
+```sh
+export DIARIZE=1
+export DIARIZE_BACKEND=community1
+# export DIARIZE_NUM_SPEAKERS=3     # optional hint when you know the headcount (0 = auto)
+# export DIARIZE_PYTHON="$HOME/.local/share/murmur/diarize-venv/bin/python"   # default
+```
+If diarization fails (missing venv/token, gated model), the run degrades to a plain transcript rather than losing the meeting.
+
+**`whisply`** (default) — diarization inline via whisply's bundled pyannote 3.1. No extra setup, but lower-quality attribution; accept the [segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) + [speaker-diarization-3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) conditions on HuggingFace. A failed diarized run retries without diarization.
 
 ## Obsidian vault archiving (optional)
 
