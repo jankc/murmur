@@ -5,7 +5,7 @@
 // No-op when no vault is configured. Idempotent (skips if a file with the same timestamp
 // prefix already exists). Re-throws aborts (so the worker requeues); other errors are the
 // caller's to log — a vault hiccup must not fail the local job.
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
@@ -34,10 +34,6 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   const when = parseStamp(base) ?? stampFromDate(new Date(summaryFile.lastModified));
   const monthDir = join(cfg.vaultRoot, cfg.vaultFolder, when.month);
   const prefix = `${when.date} ${when.time}`;
-
-  if (existsSync(monthDir) && readdirSync(monthDir).some((f) => f.startsWith(prefix) && f.endsWith(".md"))) {
-    return; // already archived
-  }
   // The summary already opens with an LLM-generated title (see prompts/summary.md), so read
   // it straight from the text — no second model round-trip. Older summaries that predate the
   // title-in-prompt have no leading title and fall back to a dedicated generateTitle() call.
@@ -70,6 +66,13 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   const fileBase = title ? `${prefix} ${title}` : prefix;
   const out = join(monthDir, `${fileBase}.md`);
   await mkdir(monthDir, { recursive: true });
+  // Replace any prior note for this recording (same timestamp prefix) — its title may have
+  // changed on reprocessing — so the vault always reflects the latest summary, no duplicates.
+  for (const f of readdirSync(monthDir)) {
+    if (f.startsWith(prefix) && f.endsWith(".md") && join(monthDir, f) !== out) {
+      try { rmSync(join(monthDir, f)); } catch {}
+    }
+  }
   await Bun.write(out, fm + summaryText.replace(/^\s+/, ""));
   log.info("archive", `→ ${out}`);
 }

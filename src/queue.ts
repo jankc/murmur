@@ -54,18 +54,17 @@ export class Queue {
   }
 
   /**
-   * Add a wav to the queue. Skips if already queued or already fully processed
-   * (summary exists) unless force is set. Returns the item, or null if skipped/missing.
+   * Add a wav to the queue. A recording's location is its state: anything handed here
+   * (it's in inbox/) is meant to be processed, so we do NOT skip based on an existing
+   * transcript/summary — re-dropping a wav into inbox reprocesses it, overwriting outputs.
+   * The only skip is queue integrity: already queued, or mid-enqueue. Returns the item, or
+   * null if it was a duplicate.
    */
-  async enqueue(wavPath: string, opts: { force?: boolean } = {}): Promise<QueueItem | null> {
+  async enqueue(wavPath: string): Promise<QueueItem | null> {
     const base = pathBasename(wavPath, ".wav");
     if (this.items.some((i) => i.basename === base) || this.enqueuing.has(base)) return null;
     this.enqueuing.add(base);
     try {
-      if (!opts.force && (await Bun.file(this.cfg.paths.summary(base)).exists())) {
-        log.info("queue", `skip ${base} (summary already exists)`);
-        return null;
-      }
       const item: QueueItem = { basename: base, wavPath, enqueuedAt: Date.now(), attempts: 0 };
       this.items.push(item);
       await this.persist();

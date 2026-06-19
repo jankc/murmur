@@ -66,10 +66,11 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
   const base = basename(wavPath, ".wav");
   const job: QueueItem = { basename: base, wavPath, enqueuedAt: 0, attempts: 0 };
   const signal = new AbortController().signal;
+  // Process unconditionally, overwriting any prior outputs — same as the daemon worker.
   const txt = cfg.paths.transcript(base);
-  if (!(await Bun.file(txt).exists())) await transcribe(cfg, job, signal);
+  await transcribe(cfg, job, signal);
   const md = cfg.paths.summary(base);
-  if (!(await Bun.file(md).exists())) await summarize(cfg, txt, signal);
+  await summarize(cfg, txt, signal);
   await archiveSummary(cfg, base, signal).catch((e) => console.error(`archive: ${String(e)}`));
   // Reached only on success (transcribe/summarize throw on failure): retire the wav to
   // processed/ so inbox stays pending-only, exactly as the daemon worker does.
@@ -156,8 +157,7 @@ switch (cmd) {
     if (!wav) die(`recording not found: ${arg || "(none)"}`);
     const base = basename(wav, ".wav");
     const txt = cfg.paths.transcript(base);
-    if (await Bun.file(txt).exists()) console.error(`transcript exists, skipping: ${txt}`);
-    else await transcribe(cfg, { basename: base, wavPath: wav, enqueuedAt: 0, attempts: 0 }, new AbortController().signal);
+    await transcribe(cfg, { basename: base, wavPath: wav, enqueuedAt: 0, attempts: 0 }, new AbortController().signal);
     console.log(txt);
     break;
   }

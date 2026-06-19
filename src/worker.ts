@@ -82,23 +82,18 @@ export class Worker {
     const ac = new AbortController();
     this.current = { ac, job };
     try {
+      // The job is in inbox/ → process it unconditionally, overwriting any prior outputs.
+      // (Re-dropping a wav into inbox is the supported way to reprocess; there are no
+      // transcript/summary existence checks — location is the state.)
       const txt = this.cfg.paths.transcript(job.basename);
       await writeCurrent(this.cfg, { basename: job.basename, stage: "transcribe", startedAt: Date.now() });
-      if (await Bun.file(txt).exists()) {
-        log.info("worker", `transcript exists, skipping transcription: ${job.basename}`);
-      } else {
-        await transcribe(this.cfg, job, ac.signal);
-      }
+      await transcribe(this.cfg, job, ac.signal);
 
       await writeCurrent(this.cfg, { basename: job.basename, stage: "summarize", startedAt: Date.now() });
-      if (await Bun.file(this.cfg.paths.summary(job.basename)).exists()) {
-        log.info("worker", `summary exists, skipping summarization: ${job.basename}`);
-      } else {
-        await summarize(this.cfg, txt, ac.signal);
-      }
+      await summarize(this.cfg, txt, ac.signal);
 
       // Copy into the Obsidian vault (no-op if unconfigured). Abort propagates → requeue;
-      // a vault error is logged but must not fail a job whose summary already exists locally.
+      // a vault error is logged but must not fail a job whose summary is already written locally.
       await writeCurrent(this.cfg, { basename: job.basename, stage: "archive", startedAt: Date.now() });
       try {
         await archiveSummary(this.cfg, job.basename, ac.signal);

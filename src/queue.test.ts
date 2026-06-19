@@ -37,14 +37,13 @@ describe("Queue.enqueue", () => {
     expect(q.size()).toBe(1);
   });
 
-  test("skips when a summary already exists, unless forced", async () => {
+  test("enqueues even when a summary already exists (reprocess via inbox)", async () => {
+    // Location is the state: a wav handed to the queue is meant to be processed, so an
+    // existing transcript/summary must NOT block it (re-dropping into inbox = reprocess).
     await Bun.write(cfg.paths.summary("done"), "# Title\n\n# Shrnutí\nx");
     const q = await Queue.load(cfg);
-    expect(await q.enqueue(wav("done"))).toBeNull();
-    expect(q.size()).toBe(0);
-
-    const forced = await q.enqueue(wav("done"), { force: true });
-    expect(forced?.basename).toBe("done");
+    const item = await q.enqueue(wav("done"));
+    expect(item?.basename).toBe("done");
     expect(q.size()).toBe(1);
   });
 

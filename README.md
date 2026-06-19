@@ -58,7 +58,7 @@ murmur resume
 murmur daemon                # run the orchestrator daemon in the foreground
 ```
 
-Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. Processing is idempotent — transcription is skipped if `transcripts/<base>.txt` exists and summarization if `summaries/<base>.md` exists.
+Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. A recording's **location is its state** — processing always runs and overwrites prior outputs, so **to reprocess a recording just move its `.wav` from `recordings/processed/<YYYY-MM>/` back into `recordings/inbox/`** (no need to delete the transcript/summary first).
 
 ## The daemon (automatic processing)
 
@@ -86,7 +86,7 @@ The CLI and SwiftBar talk to this; you can too.
 | `POST /record/start` · `/record/stop` | — | start/stop recording |
 | `POST /pause` | `{"mode":"soft"\|"hard"}` | soft = finish current then idle; hard = abort + requeue |
 | `POST /resume` | — | resume processing |
-| `POST /enqueue` | `{"wav":"<path\|basename>","force":true?}` | queue a recording (dedups; skips if already summarized unless `force`) |
+| `POST /enqueue` | `{"wav":"<path\|basename>"}` | queue a recording for (re)processing (dedups only against what's already queued) |
 
 ## SwiftBar (optional menubar)
 
@@ -141,7 +141,7 @@ tags: [meeting, murmur]
 ---
 ```
 
-Archiving is idempotent (skips if a note with the same `YYYY-MM-DD HH-MM` prefix exists) and best-effort — a vault/iCloud hiccup is logged but never fails the local job. Leave `OBSIDIAN_VAULT` empty to disable.
+Archiving replaces any prior note for the same recording (matched on the `YYYY-MM-DD HH-MM` prefix), so reprocessing refreshes the vault without leaving duplicates, and it's best-effort — a vault/iCloud hiccup is logged but never fails the local job. Leave `OBSIDIAN_VAULT` empty to disable.
 
 ## Notes
 

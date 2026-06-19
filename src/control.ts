@@ -65,11 +65,10 @@ export function startControl(deps: Deps): ReturnType<typeof Bun.serve> {
         case "POST /enqueue": {
           const body = await safeJson(req);
           const wavArg = typeof body.wav === "string" ? body.wav : "";
-          const force = body.force === true;
           if (!wavArg) return json({ error: "missing 'wav'" }, 400);
           const resolved = await resolveWav(cfg, wavArg);
           if (!resolved) return json({ error: `wav not found: ${wavArg}` }, 404);
-          const item = await queue.enqueue(resolved, { force });
+          const item = await queue.enqueue(resolved);
           worker.notifyChange();
           return json({ enqueued: item?.basename ?? null });
         }
