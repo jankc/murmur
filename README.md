@@ -1,16 +1,16 @@
 # murmur
 
-Local meeting recorder, transcriber, and summarizer for macOS. Records an Aggregate Device with `ffmpeg`, transcribes with `mlx-whisper` (+ optional `pyannote` speaker diarization), and summarizes with a local LLM via `ollama`. Everything runs locally — no cloud, no third parties.
+Local meeting recorder, transcriber, and summarizer for macOS. Captures system audio **and** your mic (recommended backend: [`ownscribe`](#recording-backends) — a ScreenCaptureKit tap on the default output, so it never reroutes audio or disables the volume keys), transcribes with `mlx-whisper` (+ optional `pyannote` speaker diarization), and summarizes with a local LLM via `ollama`. Everything runs locally — no cloud, no third parties.
 
 One stack: a single [Bun](https://bun.sh)/TypeScript codebase in `src/` provides both the **`murmur` CLI** (manual control) and a long-lived **daemon** (automatic, GPU-pause-aware processing). They share the same modules, so every step has one implementation.
 
 ```
-record (ffmpeg) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ asr (mlx-whisper + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
-                                            └ daemon: watch inbox · serial queue · GPU-pause · auto-defer
-                       on success the wav moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
+record (system + mic) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ asr (mlx-whisper + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
+   └ daemon: watches inbox · serial queue · GPU-pause · auto-defers while a recording is live
+     on success the wav moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
 ```
 
-**A recording's folder is its state.** ffmpeg writes into `recordings/.partial/` (not watched), so an in-progress recording never triggers the pipeline or clutters the inbox. When recording ends the finished `.wav` is moved into `recordings/inbox/` — the only folder the daemon watches. Once fully processed (transcribed → summarized → archived) it's **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves it to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur process` re-run command to `logs/process-failures.log`.
+**A recording's folder is its state.** An in-progress recording stays in `recordings/.partial/` (not watched), so it never triggers the pipeline or clutters the inbox. When recording ends the finished `.wav` is moved into `recordings/inbox/` — the only folder the daemon watches. Once fully processed (transcribed → summarized → archived) it's **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves it to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur process` re-run command to `logs/process-failures.log`.
 
 ## Install
 
@@ -20,7 +20,7 @@ brew install ffmpeg ollama uv terminal-notifier    # terminal-notifier optional 
 # uv  — via mise/brew (above), or: curl -fsSL https://astral.sh/uv/install.sh | sh   (drives the ASR venv)
 ollama pull gemma4:26b-mlx                          # or whatever you set as MODEL_SUMMARY
 ```
-`ffmpeg`, `ollama` + a pulled model, `bun`, and `uv` are required; `terminal-notifier` is optional. Building a Swift recording helper (`ownscribe`/`audiotee`, below) also needs the **Xcode Command Line Tools** (`xcode-select --install`).
+`ffmpeg`, `ollama` + a pulled model, `bun`, and `uv` are required; `terminal-notifier` is optional. Building the `ownscribe` recording helper (below) also needs the **Xcode Command Line Tools** (`xcode-select --install`).
 
 The ASR engine (transcription + optional diarization) runs in one Python venv with both
 `mlx-whisper` and `pyannote.audio` 4 — `asr/asr.py` calls them directly:
@@ -59,7 +59,7 @@ Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-
 ## Usage — the `murmur` CLI
 
 ```sh
-murmur record [--device N]   # start recording the Aggregate Device
+murmur record [--device N]   # start recording (system audio + your mic; --device sets the ffmpeg Aggregate Device index)
 murmur stop                  # stop recording
 murmur process [audio]       # transcribe + summarize (newest, or by path/basename)
 murmur transcribe [audio]    # transcribe only → prints transcript path
@@ -120,9 +120,7 @@ export RECORD_BACKEND=ownscribe
 # export OWNSCRIBE_BIN="$HOME/.local/bin/ownscribe-audio"   # default
 ```
 
-**`ffmpeg`** (default) — records one avfoundation **Aggregate Device** (mic + system audio via BlackHole) through the `pan=` downmix. One hardware clock, so it's perfectly synced — but routing system audio requires a BlackHole multi-output as the system output, which **disables the volume keys**, and a meeting app grabbing the mic can starve the aggregate. Tune with `RECORD_DEVICE_INDEX` / `RECORD_PAN_FILTER`.
-
-**`audiotee`** — like `ownscribe`, but the system tap ([AudioTee](https://github.com/makeusabrew/audiotee)) and the mic are two *independent* processes mixed on stop; without host-time alignment the mic's speaker bleed can echo on speakers. Kept as an option (fine on headphones) — prefer `ownscribe`. Build: `swift build -c release` in the AudioTee repo (pin `56ac954`) → `~/.local/bin/audiotee`; then `RECORD_BACKEND=audiotee` + `RECORD_MIC_DEVICE`.
+**`ffmpeg`** (default; no-build fallback) — records one avfoundation **Aggregate Device** (mic + system audio via BlackHole) through the `pan=` downmix. One hardware clock, so it's perfectly synced — but routing system audio requires a BlackHole multi-output as the system output, which **disables the volume keys**, and a meeting app grabbing the mic can starve the aggregate. Tune with `RECORD_DEVICE_INDEX` / `RECORD_PAN_FILTER`. Use it only if you'd rather not build the Swift helper; `ownscribe` is better for recording on speakers.
 
 ## Diarization (speaker labels) — opt-in
 
@@ -163,9 +161,9 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 
 - Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.
 - **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
-- On `stop`, murmur measures the recording's level and warns (notification + log) if it's effectively silent — per-track for the `audiotee` backend (system vs mic), whole-file for `ffmpeg`. Usual causes: a routing slip (system output not on the BlackHole multi-output) or a muted/grabbed mic. Threshold: `RECORD_SILENCE_DB` (default `-80` dBFS).
+- On `stop`, murmur measures the finished recording's level and warns (notification + log) if it's effectively silent. Usual causes: a routing slip (e.g. system output not on the BlackHole multi-output on the `ffmpeg` backend) or a muted/grabbed mic. Threshold: `RECORD_SILENCE_DB` (default `-80` dBFS).
 - The `asr/asr.py` helper reads the wav read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
-- Each pipeline stage streams to its own log under `logs/`: ffmpeg → `meeting-<ts>.log`, audiotee → `<base>.audiotee.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses).
+- Each pipeline stage streams to its own log under `logs/`: recording → `meeting-<ts>.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
 - `config.sh` is the only shell file — it's just environment configuration (and a convenient hook for sourcing secrets). All logic is TypeScript in `src/`.
