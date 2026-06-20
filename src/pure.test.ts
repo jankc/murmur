@@ -40,7 +40,7 @@ describe("stamp", () => {
 });
 
 describe("audio extension helpers", () => {
-  test("isRecordingFile accepts canonical FLAC and legacy WAV, rejects others", () => {
+  test("isRecordingFile accepts FLAC and WAV, rejects others", () => {
     expect(isRecordingFile("meeting-2026-06-18_16-21-05.flac")).toBe(true);
     expect(isRecordingFile("meeting-2026-06-18_16-21-05.wav")).toBe(true);
     // Case-SENSITIVE: an uppercase ext is rejected, so we never pick up a file locate() (which
@@ -56,7 +56,7 @@ describe("audio extension helpers", () => {
     expect(stripAudioExt("meeting-2026-06-18_16-21-05.flac")).toBe("meeting-2026-06-18_16-21-05");
     expect(stripAudioExt("meeting-2026-06-18_16-21-05.wav")).toBe("meeting-2026-06-18_16-21-05");
     expect(stripAudioExt("meeting-2026-06-18_16-21-05")).toBe("meeting-2026-06-18_16-21-05"); // no-op
-    expect(stripAudioExt("notes.m4a")).toBe("notes.m4a"); // not a known canonical/legacy ext
+    expect(stripAudioExt("notes.m4a")).toBe("notes.m4a"); // not a recognized recording ext
     expect(stripAudioExt("a.b.flac")).toBe("a.b"); // only the trailing ext is stripped
   });
 });

@@ -13,8 +13,8 @@ import { monthOf } from "./stamp.ts";
 import { log } from "./log.ts";
 
 /** Locate a recording by bare basename, wherever it currently sits in its lifecycle
- *  (inbox → failed → processed/<month>). Checks the canonical .flac first, then a legacy .wav
- *  at each location, so the existing back catalogue keeps resolving. Returns the path or null. */
+ *  (inbox → failed → processed/<month>). Checks `.flac` first, then `.wav`, at each location
+ *  (both are accepted recording formats). Returns the path or null. */
 export async function locate(cfg: Config, base: string): Promise<string | null> {
   for (const dir of [cfg.paths.inboxDir, cfg.paths.failedDir]) {
     for (const ext of KNOWN_AUDIO_EXTS) {
@@ -52,8 +52,8 @@ export async function resolveWav(cfg: Config, input: string): Promise<string | n
 export async function move(cfg: Config, base: string, to: "processed" | "failed"): Promise<string | null> {
   const src = await locate(cfg, base);
   if (!src) return null; // already moved, or recorded elsewhere
-  // Relocate the file as-is, keeping its actual extension (.flac, or a legacy .wav) — so we
-  // never rename WAV bytes into a .flac name (a reprocessed/back-catalogue recording stays valid).
+  // Relocate the file as-is, keeping its actual extension (`.flac` or `.wav`) — so we never
+  // rename WAV bytes into a `.flac` name (a wav recording stays a valid wav).
   const name = pathBasename(src);
   const dest =
     to === "processed"

@@ -385,7 +385,7 @@ switch (cmd) {
     const stillFailing: string[] = [];
     for (const n of names) {
       // Don't let one bad recording (inline path) abort the rest — catch, continue, report.
-      // Dispatch the actual file (n keeps its real extension — a legacy entry may be .wav).
+      // Dispatch the actual file (n keeps its real extension — an entry may be .wav).
       try {
         await dispatchWav(join(cfg.paths.failedDir, n));
       } catch (e) {

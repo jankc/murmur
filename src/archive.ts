@@ -51,7 +51,7 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   }
 
   // Resolve the actual stored recording once — for the duration and the frontmatter source
-  // pointer (a new recording is .flac; a legacy/back-catalogue one may still be .wav).
+  // pointer (a recording murmur produced is .flac; a .wav input is archived as .wav).
   const audioPath = await locate(cfg, base); // inbox during processing, processed/ afterwards
   const sourceName = audioPath ? basename(audioPath) : `${base}${CANONICAL_AUDIO_EXT}`;
   const speakers = await countSpeakers(cfg, base);
@@ -123,7 +123,7 @@ async function countSpeakers(cfg: Config, base: string): Promise<number> {
 }
 
 /** Human duration (H:MM:SS / M:SS) of the stored recording, or null if unknown. FLAC is
- *  compressed (size ≠ length), so probe it with ffprobe; a legacy raw-PCM .wav (mono 16 kHz
+ *  compressed (size ≠ length), so probe it with ffprobe; a raw-PCM .wav (mono 16 kHz
  *  s16le, 44-byte header) is exact from file size with no subprocess. */
 async function durationOf(cfg: Config, audioPath: string): Promise<string | null> {
   const seconds = audioPath.toLowerCase().endsWith(".wav")

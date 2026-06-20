@@ -6,10 +6,10 @@
 //   recordings/failed/     — a non-retryable failure (moved here so it doesn't retry-loop)
 import { join } from "node:path";
 
-// Canonical archived audio format. New recordings (recorder + importer) are stored as FLAC:
-// lossless (identical ASR accuracy) but ~half the size of the old 16 kHz mono s16le WAV.
-// Lookups/filters must still accept legacy `.wav` so the existing back catalogue keeps working
-// — route everything through isRecordingFile()/stripAudioExt() rather than hardcoding an ext.
+// Canonical archived audio format. murmur writes FLAC: lossless (identical ASR accuracy) at
+// ~half the size of 16 kHz mono s16le WAV. WAV is also an accepted recording format — a `.wav`
+// in inbox/ (a dropped input, or the older back catalogue) is picked up, processed, and archived
+// as-is — so route extension logic through isRecordingFile()/stripAudioExt(), not a hardcoded ext.
 export const CANONICAL_AUDIO_EXT = ".flac"; // what NEW recordings are written as
 export const KNOWN_AUDIO_EXTS = [".flac", ".wav"] as const; // recognised when scanning/locating
 
@@ -17,7 +17,7 @@ export const KNOWN_AUDIO_EXTS = [".flac", ".wav"] as const; // recognised when s
 // lowercase .flac/.wav, and locate() builds lowercase paths/globs — accepting an uppercase ext
 // here would let the watcher pick up a file that locate()/move() then can't find on a
 // case-sensitive volume (it would loop in inbox, reprocessed on every restart).
-/** True if a filename is a recording we should pick up (canonical FLAC, or a legacy WAV). */
+/** True if a filename is a recording we should pick up (FLAC, or WAV input). */
 export function isRecordingFile(name: string): boolean {
   return KNOWN_AUDIO_EXTS.some((e) => name.endsWith(e));
 }
@@ -54,8 +54,8 @@ export interface Paths {
   importLedger: string; // `murmur import` dedup cache (id → {size, basename, importedAt})
   failureLog: string;
   // Per-recording derived paths. There's deliberately no processed/failed builder: those folders
-  // hold a mix of canonical FLAC and legacy WAV, so callers must resolve via recordings.ts
-  // locate()/move() (which check both extensions) rather than assume one.
+  // hold a mix of FLAC and WAV, so callers must resolve via recordings.ts locate()/move()
+  // (which check both extensions) rather than assume one.
   partialWav: (basename: string) => string; // raw PCM capture target (always .wav)
   inboxWav: (basename: string) => string; // canonical artifact target (.flac) for NEW recordings
   transcript: (basename: string) => string;
@@ -96,8 +96,8 @@ export function buildPaths(base: string): Paths {
     // .partial/ holds the raw PCM capture — stays WAV (maximally crash-salvageable); it's
     // transcoded to canonical FLAC at the .partial→inbox boundary, never archived as-is.
     partialWav: (b: string) => join(partialDir, `${b}.wav`),
-    // Canonical inbox target (FLAC) for a NEW recording. Lookups for a legacy `.wav` back
-    // catalogue (in inbox/failed/processed) live in recordings.ts locate(), which checks both.
+    // Canonical inbox target (FLAC) for a NEW recording. A `.wav` (input, or back catalogue) in
+    // inbox/failed/processed is resolved by recordings.ts locate(), which checks both exts.
     inboxWav: (b: string) => join(inboxDir, `${b}${CANONICAL_AUDIO_EXT}`),
     transcript: (b: string) => join(transcriptsDir, `${b}.txt`),
     summary: (b: string) => join(summariesDir, `${b}.md`),

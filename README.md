@@ -94,7 +94,7 @@ Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`r
 
 ## The daemon (automatic processing)
 
-The daemon watches `recordings/inbox/` and runs each new recording (FLAC, or a legacy WAV) through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand. Done recordings move to `processed/<YYYY-MM>/` (see [folder = state](#murmur) above).
+The daemon watches `recordings/inbox/` and runs each new recording (FLAC, or WAV) through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand. Done recordings move to `processed/<YYYY-MM>/` (see [folder = state](#murmur) above).
 
 Run it always-on via the LaunchAgent:
 ```sh

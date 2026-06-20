@@ -1,4 +1,4 @@
-// Watches recordings/inbox/ for new recordings (canonical FLAC, or a legacy WAV). macOS
+// Watches recordings/inbox/ for new recordings (FLAC, or WAV). macOS
 // fs.watch (FSEvents) is coarse and can coalesce/miss events, so we (a) debounce + wait for the
 // file size to stabilize (producer done writing — mirrors the old watch-recordings.sh 2s-stable
 // logic), and (b) do a reconcile scan on boot to catch files created while the daemon was down.
