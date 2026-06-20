@@ -170,7 +170,14 @@ export class MeetingRecorder implements Recorder {
    *  inbox/. Returns the inbox path, or null if nothing usable was captured. */
   private async finalizeState(st: RecordingState): Promise<string | null> {
     if (st.backend === "ownscribe" && !(await this.transcodeOwnscribe(st))) {
-      this.cleanupTemps(st);
+      const raw = st.parts[0]?.file;
+      // Transcode failed — never delete a non-empty merged capture, or the only copy of the
+      // meeting is lost on a transient ffmpeg hiccup. Only clean up when there's no audio.
+      if (raw && existsSync(raw) && statSync(raw).size > 0) {
+        log.error("recorder", `${st.base}: transcode failed — kept raw capture ${raw}; recover with: ffmpeg -i "${raw}" -ac 1 -ar 16000 -c:a pcm_s16le "<out>.wav"`);
+      } else {
+        this.cleanupTemps(st);
+      }
       return null;
     }
     if (!existsSync(st.outWav) || statSync(st.outWav).size === 0) {

@@ -59,3 +59,17 @@ upstream sync tooling, `MEETINGS_BASE`→log-path launchd wrapper, data relocati
 - [ ] Scattered dir-creation vs one `ensureLayout(cfg)`. `daemon.ts:16-27`
 - [ ] `-d`/`--device` undocumented; fragile hand-rolled flag parser. `cli.ts:34-40,93`
 - [ ] Optional root `package.json` so dev cmds don't require `cd src`. `README.md:171-176`
+
+## Whole-repo Codex review follow-ups (deferred — need a design call)
+
+From the 2026-06-20 full-repo pass (base = root commit). The four clean-fix findings were
+fixed (data-loss on finalize, control-API CSRF, external-path move guard, archive seconds);
+these two need a decision before patching:
+
+- [ ] **Enforce MAX_DURATION for ownscribe without the daemon** — `murmur record` detaches and
+  only the (normally always-on) daemon's `finalizeOrphans()` enforces the cap; ownscribe-audio
+  has no `--max-duration` flag. Options: add one to the vendored Swift, a CLI-side watchdog, or
+  document the daemon dependency. `recorder.ts:104`
+- [ ] **Crash-consistent move/dequeue in the worker** — a crash between `move(processed)` and
+  `commitDequeue()` can flip a completed job into a `failed/` one on restart. Narrow window; the
+  fix (reorder, or detect already-processed in `recover()`) has its own trade-offs. `worker.ts:107`

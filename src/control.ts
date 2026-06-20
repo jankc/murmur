@@ -38,6 +38,17 @@ export function startControl(deps: Deps): ReturnType<typeof Bun.serve> {
       const { pathname } = new URL(req.url);
       const route = `${req.method} ${pathname}`;
 
+      // CSRF guard for state-changing routes: a browser form can POST to loopback, but it
+      // can't send an application/json content-type (that forces a CORS preflight we never
+      // answer) nor omit the Origin header. Our own clients (CLI/SwiftBar fetch, curl) send
+      // no Origin and an application/json content-type — they pass; a web page is rejected.
+      if (req.method !== "GET") {
+        const ct = req.headers.get("content-type") ?? "";
+        if (!ct.startsWith("application/json") || req.headers.get("origin")) {
+          return json({ error: "forbidden" }, 403);
+        }
+      }
+
       switch (route) {
         case "GET /status": {
           return json(await statusSnapshot(cfg, recorder, pause, queue.list()));

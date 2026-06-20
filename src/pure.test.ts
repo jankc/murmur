@@ -12,6 +12,7 @@ describe("stamp", () => {
     expect(parseStamp("meeting-2026-06-18_16-21-05")).toEqual({
       date: "2026-06-18",
       time: "16-21",
+      clock: "16-21-05",
       display: "16:21",
       month: "2026-06",
     });
@@ -21,9 +22,14 @@ describe("stamp", () => {
     expect(parseStamp("notes-final")).toBeNull();
   });
 
+  test("clock keeps seconds so same-minute recordings get distinct vault identities", () => {
+    expect(parseStamp("meeting-2026-06-18_16-21-05")?.clock).toBe("16-21-05");
+    expect(parseStamp("meeting-2026-06-18_16-21-42")?.clock).toBe("16-21-42");
+  });
+
   test("stampFromDate formats a Date in local time", () => {
     const s = stampFromDate(new Date(2026, 5, 18, 16, 21, 5)); // month is 0-based → June
-    expect(s).toEqual({ date: "2026-06-18", time: "16-21", display: "16:21", month: "2026-06" });
+    expect(s).toEqual({ date: "2026-06-18", time: "16-21", clock: "16-21-05", display: "16:21", month: "2026-06" });
   });
 
   test("monthOf prefers the name, falls back to the date", () => {

@@ -80,8 +80,9 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
     stage = "summarize";
     await summarize(cfg, txt, signal);
     await archiveSummary(cfg, base, signal).catch((e) => console.error(`archive: ${String(e)}`));
-    // Success: retire the wav to processed/ so inbox stays pending-only, like the worker.
-    await move(cfg, base, "processed");
+    // Only retire managed recordings (under MEETINGS_BASE) to processed/; an external one-off
+    // path has no managed home, and a basename match could move an unrelated recording.
+    if (wavPath.startsWith(cfg.meetingsBase)) await move(cfg, base, "processed");
     return { txt, md };
   } catch (err) {
     const code = err instanceof EngineError ? err.exitCode : 1;

@@ -33,7 +33,9 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   // summaryFile is guaranteed to exist here (early-returned above otherwise).
   const when = parseStamp(base) ?? stampFromDate(new Date(summaryFile.lastModified));
   const monthDir = join(cfg.vaultRoot, cfg.vaultFolder, when.month);
-  const prefix = `${when.date} ${when.time}`;
+  // Second precision (HH-MM-SS), so two recordings that start in the same minute get
+  // distinct note identities — the dedup below must not delete/overwrite an unrelated note.
+  const prefix = `${when.date} ${when.clock}`;
   // The summary already opens with an LLM-generated title (see prompts/summary.md), so read
   // it straight from the text — no second model round-trip. Older summaries that predate the
   // title-in-prompt have no leading title and fall back to a dedicated generateTitle() call.
