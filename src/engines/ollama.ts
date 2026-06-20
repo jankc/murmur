@@ -34,7 +34,12 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
     return out;
   }
 
-  await preflight(cfg, signal);
+  // Stage-timeout backstop — created BEFORE preflight so the documented per-stage limit also
+  // bounds a down/unresponsive Ollama, not just the generate call. A user hard-pause (signal)
+  // still aborts independently. Default 2h is well above any real summarize.
+  const timeout = AbortSignal.timeout(cfg.processTimeoutSeconds * 1000);
+
+  await preflight(cfg, signal, timeout);
 
   const prompt = [
     await Bun.file(cfg.promptFile).text(),
@@ -47,10 +52,6 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
   ].join("\n");
 
   log.info("ollama", `summarizing ${base} with ${cfg.modelSummary}`);
-  // Backstop a wedged ollama (MPS deadlock etc.) so it can't stall the queue forever; the
-  // user's hard-pause signal still aborts independently. PROCESS_TIMEOUT_SECONDS (default 2h)
-  // is well above any real summarize, so it never trips a legitimate job.
-  const timeout = AbortSignal.timeout(cfg.processTimeoutSeconds * 1000);
   let res: Response;
   try {
     res = await fetch(`${cfg.ollamaHost}/api/generate`, {
@@ -102,7 +103,7 @@ export async function generateTitle(cfg: Config, summaryText: string, signal: Ab
   return response.trim().split("\n")[0]?.trim() ?? "";
 }
 
-async function preflight(cfg: Config, signal: AbortSignal): Promise<void> {
+async function preflight(cfg: Config, signal: AbortSignal, timeout: AbortSignal): Promise<void> {
   if (await ping(cfg)) return;
   log.info("ollama", "not reachable — launching Ollama.app");
   try {
@@ -112,6 +113,7 @@ async function preflight(cfg: Config, signal: AbortSignal): Promise<void> {
   }
   for (let i = 0; i < 60; i++) {
     if (signal.aborted) throw new AbortError("ollama preflight aborted");
+    if (timeout.aborted) throw new EngineError(`ollama timed out after ${cfg.processTimeoutSeconds}s`, 124);
     if (await ping(cfg)) return;
     await sleep(1000);
   }

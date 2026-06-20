@@ -16,7 +16,7 @@ fi
 echo "==> ASR venv (mlx-whisper + pyannote.audio)"
 # Honor a MURMUR_PYTHON set in config.sh — the CLI sources config.sh later, so setup must
 # agree on the venv path or `murmur doctor`/ASR break after a "successful" setup.
-if [ -f config.sh ]; then set +u; . ./config.sh; set -u; fi
+if [ -f config.sh ]; then set +eu; . ./config.sh; set -eu; fi
 VENV_PY="${MURMUR_PYTHON:-$HOME/.local/share/murmur/asr-venv/bin/python}"
 VENV_DIR="$(dirname "$(dirname "$VENV_PY")")"
 command -v uv >/dev/null 2>&1 || { echo "    ERROR: uv not found — brew install uv"; exit 1; }

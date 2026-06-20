@@ -84,11 +84,15 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
     await move(cfg, base, "processed");
     return { txt, md };
   } catch (err) {
-    // Mirror the daemon worker's failure path: record the failure and move the wav to
-    // failed/ so an inline failure doesn't leave it sitting in inbox/ or processed/ untracked.
     const code = err instanceof EngineError ? err.exitCode : 1;
-    await logFailure(cfg, base, stage, code, wavPath);
-    await move(cfg, base, "failed");
+    // Only managed recordings (under MEETINGS_BASE) have a failed/ home. move()/logFailure
+    // resolve by basename, so an external one-off path (`murmur process /some/file.wav`) is
+    // left alone — otherwise a managed recording that happens to share its basename could be
+    // moved to failed/ instead.
+    if (wavPath.startsWith(cfg.meetingsBase)) {
+      await logFailure(cfg, base, stage, code, wavPath);
+      await move(cfg, base, "failed");
+    }
     throw err;
   }
 }
