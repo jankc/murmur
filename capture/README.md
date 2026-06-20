@@ -20,10 +20,12 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
 - **Pinned commit:** see [`UPSTREAM`](UPSTREAM) — the single source of truth, updated by the sync tooling below
 - **License:** MIT, © 2026 Pascal Berrang — see `LICENSE` (kept per the MIT terms)
 
-`Sources/AudioCapture.swift` is byte-for-byte upstream. The only change from upstream
-`swift/build.sh` is `BIN_DIR` → `capture/bin/` (gitignored), so the artifact lands next
-to its source instead of in a repo-root `bin/`. Upstream's `Package.swift` is **not**
-vendored: it under-links frameworks (only CoreAudio + AudioToolbox) and `swift build`
+`Sources/AudioCapture.swift` tracks upstream with **one local patch**: a `--max-duration N`
+flag (a one-shot timer that fires the normal merge+exit), so a `murmur record` capture
+self-caps like the ffmpeg backend without depending on the daemon — search the file for
+`LOCAL PATCH`. The only change from upstream `swift/build.sh` is `BIN_DIR` → `capture/bin/`
+(gitignored), so the artifact lands next to its source. Upstream's `Package.swift` is
+**not** vendored: it under-links frameworks (only CoreAudio + AudioToolbox) and `swift build`
 fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
 
 ## Keeping in sync
@@ -36,9 +38,11 @@ fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
 - **Notification (optional):** `.github/workflows/check-capture-upstream.yml` runs weekly
   and opens an issue when upstream moves past the pinned commit. Delete it if unwanted.
 
-`Sources/AudioCapture.swift` and `LICENSE` track upstream verbatim and sync blindly.
-`build.sh` is **not** auto-synced (we deviate on `BIN_DIR`) — the script only *diffs* it,
-so an upstream change to frameworks/flags surfaces for you to reconcile by hand.
+`LICENSE` tracks upstream verbatim. `Sources/AudioCapture.swift` carries the local
+`--max-duration` patch and `build.sh` deviates on `BIN_DIR`, so after a sync **re-apply the
+patch** (search `LOCAL PATCH`); `scripts/sync-capture.sh` warns about this on `--apply`. If
+the patch is ever lost, `murmur record` fails loudly with `Unknown option: --max-duration`
+rather than silently dropping the cap.
 
 After any sync, redeploy the binary: `cp capture/bin/ownscribe-audio ~/.local/bin/`.
 

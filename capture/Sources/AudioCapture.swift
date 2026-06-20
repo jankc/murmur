@@ -748,7 +748,7 @@ func printUsage() {
     ownscribe-audio — system audio capture helper
 
     USAGE:
-        ownscribe-audio capture --output FILE [--mic] [--mic-device NAME] [--silence-timeout N]
+        ownscribe-audio capture --output FILE [--mic] [--mic-device NAME] [--silence-timeout N] [--max-duration N]
         ownscribe-audio list-apps
         ownscribe-audio list-devices
 
@@ -758,6 +758,7 @@ func printUsage() {
         --mic-device NAME    Use specific mic input device (implies --mic)
         --capture-mode-all   Capture all system audio without showing the source picker
         --silence-timeout N  Auto-stop after N seconds of silence (0 = disabled)
+        --max-duration N     Auto-stop after N seconds total (0 = disabled)
         --help, -h           Show this help
 
     SUBCOMMANDS:
@@ -794,6 +795,7 @@ func main() {
         var micDeviceName: String?
         var captureModeAll = false
         var silenceTimeout: TimeInterval = 0
+        var maxDuration: TimeInterval = 0
 
         var i = 2
         while i < args.count {
@@ -828,6 +830,17 @@ func main() {
                     exit(1)
                 }
                 silenceTimeout = val
+            case "--max-duration":
+                i += 1
+                guard i < args.count, let val = TimeInterval(args[i]) else {
+                    fputs("Error: --max-duration requires a number of seconds\n", stderr)
+                    exit(1)
+                }
+                if val < 0 {
+                    fputs("Error: --max-duration must be zero (disabled) or a positive number of seconds\n", stderr)
+                    exit(1)
+                }
+                maxDuration = val
             default:
                 fputs("Unknown option: \(args[i])\n", stderr)
                 printUsage()
@@ -905,6 +918,17 @@ func main() {
         signal(SIGTERM, SIG_IGN)
         sigtermSource.setEventHandler { shutdown() }
         sigtermSource.resume()
+
+        // Hard duration cap — self-terminate (merge + exit) so a forgotten capture can't
+        // record forever, with no dependency on an external supervisor (parity with the
+        // ffmpeg backend's -t). [LOCAL PATCH vs upstream — see capture/README.md]
+        if maxDuration > 0 {
+            fputs("Max duration \(Int(maxDuration))s — will stop automatically.\n", stderr)
+            DispatchQueue.main.asyncAfter(deadline: .now() + maxDuration) {
+                fputs("[MAX_DURATION]\n", stderr)
+                shutdown()
+            }
+        }
 
         Task {
             do {

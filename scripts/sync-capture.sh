@@ -82,6 +82,9 @@ fi
 echo
 echo "Applying..."
 cp "$UP_SWIFT" "$CAPTURE_DIR/Sources/AudioCapture.swift"
+echo "  WARNING: overwrote AudioCapture.swift — RE-APPLY the local --max-duration patch"
+echo "           (search 'LOCAL PATCH'; see capture/README.md), or 'murmur record' fails"
+echo "           with: Unknown option: --max-duration"
 cp "$UP_LICENSE" "$CAPTURE_DIR/LICENSE"
 sed -E -i.bak "s/^commit=.*/commit=$NEW_COMMIT/" "$UPSTREAM_FILE" && rm -f "$UPSTREAM_FILE.bak"
 

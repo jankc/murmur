@@ -102,7 +102,8 @@ export class MeetingRecorder implements Recorder {
     const raw = join(this.cfg.paths.partialDir, `${base}.oa.wav`); // ownscribe's merged output (24 kHz float)
     const logFd = openSync(join(this.cfg.paths.logsDir, `${base}.log`), "a");
     const proc = Bun.spawn(
-      [this.cfg.ownscribeBin, "capture", "-o", raw, "--mic", "--capture-mode-all"],
+      [this.cfg.ownscribeBin, "capture", "-o", raw, "--mic", "--capture-mode-all",
+        "--max-duration", String(this.cfg.maxDurationSeconds)],
       { cwd: this.cfg.meetingsBase, env: { ...process.env, PATH: this.cfg.childPath }, stdin: "ignore", stdout: logFd, stderr: logFd },
     );
     proc.unref();

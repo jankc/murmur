@@ -60,16 +60,16 @@ upstream sync tooling, `MEETINGS_BASE`→log-path launchd wrapper, data relocati
 - [ ] `-d`/`--device` undocumented; fragile hand-rolled flag parser. `cli.ts:34-40,93`
 - [ ] Optional root `package.json` so dev cmds don't require `cd src`. `README.md:171-176`
 
-## Whole-repo Codex review follow-ups (deferred — need a design call)
+## Whole-repo Codex review follow-ups — ✅ resolved 2026-06-20
 
 From the 2026-06-20 full-repo pass (base = root commit). The four clean-fix findings were
 fixed (data-loss on finalize, control-API CSRF, external-path move guard, archive seconds);
-these two need a decision before patching:
+the two that needed a design call are now done too:
 
-- [ ] **Enforce MAX_DURATION for ownscribe without the daemon** — `murmur record` detaches and
-  only the (normally always-on) daemon's `finalizeOrphans()` enforces the cap; ownscribe-audio
-  has no `--max-duration` flag. Options: add one to the vendored Swift, a CLI-side watchdog, or
-  document the daemon dependency. `recorder.ts:104`
-- [ ] **Crash-consistent move/dequeue in the worker** — a crash between `move(processed)` and
-  `commitDequeue()` can flip a completed job into a `failed/` one on restart. Narrow window; the
-  fix (reorder, or detect already-processed in `recover()`) has its own trade-offs. `worker.ts:107`
+- [x] **Enforce MAX_DURATION for ownscribe without the daemon** — added a `--max-duration` flag
+  to the vendored capture (one-shot timer → merge+exit; first local patch to the Swift, flagged
+  in `capture/README.md` + the sync script) and the recorder passes `MAX_DURATION_SECONDS`, so
+  the capture self-caps like the ffmpeg backend regardless of the daemon. `recorder.ts:104`
+- [x] **Crash-consistent move/dequeue in the worker** — dequeue before the terminal move; a crash
+  in between leaves the wav in `inbox/` for the boot reconcile to re-enqueue (harmless reprocess)
+  rather than misfiling a completed job into `failed/`. `worker.ts:107`

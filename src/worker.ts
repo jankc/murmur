@@ -104,8 +104,12 @@ export class Worker {
 
       // Done: the wav's home is now processed/<month>/ — that move IS the "processed"
       // signal (the watcher never looks outside inbox/ again).
-      await move(this.cfg, job.basename, "processed");
+      // Dequeue BEFORE the terminal move: if we crash in between, the wav stays in inbox/ and
+      // the boot reconcile re-enqueues it (a harmless reprocess) — rather than staying
+      // queued-but-already-moved, which would retry a now-missing path and misfile a completed
+      // job into failed/.
       await this.queue.commitDequeue(job.basename);
+      await move(this.cfg, job.basename, "processed");
       await clearCurrent(this.cfg);
       // A no-speech recording produces an empty-marker summary and no vault note — surface
       // that instead of a misleading "Summary ready", so a silent capture isn't mistaken for success.
