@@ -16,7 +16,11 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
   const add = (name: string, ok: boolean, detail: string, level: Check["level"] = "error") =>
     checks.push({ name, ok, detail, level });
 
-  add("config.sh", await fileOk(`${cfg.repoDir}/config.sh`), `${cfg.repoDir}/config.sh`, "warn");
+  // The config file is optional (everything has a default), so this is a warn. Either the
+  // preferred murmur.toml or the legacy config.sh satisfies it.
+  const hasToml = await fileOk(`${cfg.repoDir}/murmur.toml`);
+  const hasSh = await fileOk(`${cfg.repoDir}/config.sh`);
+  add("config file", hasToml || hasSh, hasToml ? `${cfg.repoDir}/murmur.toml` : `${cfg.repoDir}/config.sh (legacy) — none found, using defaults`, "warn");
   // PROMPT_FILE is read on every non-trivial summarize — a missing override silently breaks it.
   add("summary prompt", await fileOk(cfg.promptFile), cfg.promptFile);
   add("asr venv python", await fileOk(cfg.pythonBin), cfg.pythonBin);

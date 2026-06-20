@@ -22,7 +22,7 @@ brew install ffmpeg ollama uv terminal-notifier    # terminal-notifier optional 
 # uv  — via mise/brew (above), or: curl -fsSL https://astral.sh/uv/install.sh | sh   (drives the ASR venv)
 ollama pull gemma3:12b                              # any Ollama chat model; set it as MODEL_SUMMARY
 ```
-> The `*-mlx` tags in `config.sh.example` (e.g. `gemma4:26b-mlx`) are **custom local MLX builds**, not on the Ollama registry — create them with `ollama create`, or just use any standard pullable model.
+> The `*-mlx` tags in `murmur.toml.example` (e.g. `gemma4:26b-mlx`) are **custom local MLX builds**, not on the Ollama registry — create them with `ollama create`, or just use any standard pullable model.
 `ffmpeg`, `ollama` + a pulled model, `bun`, and `uv` are required; `terminal-notifier` is optional. Building the `ownscribe` recording helper (below) also needs the **Xcode Command Line Tools** (`xcode-select --install`).
 
 The ASR engine (transcription + optional diarization) runs in one Python venv with both
@@ -47,17 +47,24 @@ Set up audio capture (see [Recording backends](#recording-backends) for the trad
 
 ## Configure
 
-`config.sh` (gitignored; see `config.sh.example`) is sourced for configuration. Only the first two are required:
-```sh
-export MEETINGS_BASE="$HOME/Recordings/Meetings"
-export MODEL_SUMMARY="gemma3:12b"   # any Ollama chat model (the *-mlx tags are custom local builds)
-export RECORD_BACKEND=ownscribe     # recommended (see Recording backends); omit for the ffmpeg default
-# export RECORD_DEVICE_INDEX=1      # ffmpeg backend only: avfoundation index of your Aggregate Device
-export DIARIZE=1                    # speaker labels (see Diarization below)
-# HF_TOKEN for diarization — set directly, or source a secrets manager, e.g.:
-[ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"
+`murmur.toml` (gitignored; copy `murmur.toml.example`) is the single config file — both daemon settings and `murmur import` sources. Only `meetings_base` + `[summary].model` are required:
+```toml
+meetings_base = "~/Recordings/Meetings"
+
+[summary]
+model = "gemma3:12b"        # any Ollama chat model (the *-mlx tags are custom local builds)
+
+[asr]
+diarize = true              # speaker labels (see Diarization below)
+hf_token = "hf_xxx"         # required for diarization
+
+[recording]
+backend = "ownscribe"       # recommended (see Recording backends); omit for the ffmpeg default
+# device_index = "1"        # ffmpeg backend only: avfoundation index of your Aggregate Device
 ```
-Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-community/whisper-large-v3-turbo`, language `auto`-detect, `MAX_DURATION_SECONDS=7200`, …).
+Paths may start with `~/`. Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-community/whisper-large-v3-turbo`, language `auto`-detect, `max_duration_seconds = 7200`, …). An **environment variable overrides the file** — handy for keeping a secret out of `murmur.toml` (set `HF_TOKEN` in the plist's `EnvironmentVariables`, or keep it in the legacy `config.sh`).
+
+> Config is layered **env > `murmur.toml` > `config.sh` > defaults**, so the legacy `config.sh` still works *underneath* `murmur.toml` (and `sources.json` is read only when `murmur.toml` has no `[[sources]]`). That layering is exactly what lets you keep config in `murmur.toml` while a sourced secret like `HF_TOKEN` stays in `config.sh`.
 
 ## Usage — the `murmur` CLI
 
@@ -86,11 +93,11 @@ The daemon watches `recordings/inbox/` and runs each new recording (FLAC, or a l
 Run it always-on via the LaunchAgent:
 ```sh
 murmur daemon install        # copy the plist into ~/Library/LaunchAgents/ and start it
-murmur daemon restart        # after editing config.sh or the plist (bootout + bootstrap)
+murmur daemon restart        # after editing murmur.toml or the plist (bootout + bootstrap)
 murmur daemon stop           # ( / start )
 murmur logs -f               # tail the daemon logs (out + err)
 ```
-`murmur daemon restart` re-reads an edited plist (`kickstart` alone wouldn't). The daemon's log location is derived from `MEETINGS_BASE` by `launchd/run-daemon.sh`, so relocating the base needs only a `config.sh` edit + `murmur daemon restart`. The plist still hard-codes machine-specific paths — the `bun` mise install in `PATH`, the repo's `run-daemon.sh`, and the `WorkingDirectory` — so **on a new machine (or a different username/repo location) edit those**, and update the `bun` path whenever you reinstall bun.
+`murmur daemon restart` re-reads an edited plist (`kickstart` alone wouldn't). The daemon's log location is derived from `MEETINGS_BASE` by `launchd/run-daemon.sh` (via `murmur print-env`), so relocating the base needs only a `murmur.toml` edit + `murmur daemon restart`. The plist still hard-codes machine-specific paths — the `bun` mise install in `PATH`, the repo's `run-daemon.sh`, and the `WorkingDirectory` — so **on a new machine (or a different username/repo location) edit those**, and update the `bun` path whenever you reinstall bun.
 
 ### Control API (`http://127.0.0.1:7461`)
 
@@ -113,7 +120,7 @@ ln -s "$PWD/swiftbar/murmur.5s.sh" "$HOME/Library/Application Support/SwiftBar/P
 
 ## Recording backends
 
-Set `RECORD_BACKEND` in `config.sh`:
+Set `backend` under `[recording]` in `murmur.toml`:
 
 **`ownscribe`** (recommended) — one helper captures system audio (ScreenCaptureKit) **and** your mic, then merges them **host-time-aligned** on stop. No BlackHole, no aggregate, no output routing → **the macOS volume keys keep working**; and because the two streams are time-synced, the mic's unavoidable speaker bleed reads as "emphasized voice," not an echo. Best for capturing both sides on speakers.
 
@@ -121,30 +128,33 @@ Build the helper once (the Swift source is vendored in [`capture/`](capture/), f
 ```sh
 bash capture/build.sh && cp capture/bin/ownscribe-audio ~/.local/bin/ownscribe-audio
 ```
-```sh
-export RECORD_BACKEND=ownscribe
-# export OWNSCRIBE_BIN="$HOME/.local/bin/ownscribe-audio"   # default
+```toml
+[recording]
+backend = "ownscribe"
+# ownscribe_bin = "~/.local/bin/ownscribe-audio"   # default
 ```
 
-**`ffmpeg`** (default; no-build fallback) — records one avfoundation **Aggregate Device** (mic + system audio via BlackHole) through the `pan=` downmix. One hardware clock, so it's perfectly synced — but routing system audio requires a BlackHole multi-output as the system output, which **disables the volume keys**, and a meeting app grabbing the mic can starve the aggregate. Tune with `RECORD_DEVICE_INDEX` / `RECORD_PAN_FILTER`. Use it only if you'd rather not build the Swift helper; `ownscribe` is better for recording on speakers.
+**`ffmpeg`** (default; no-build fallback) — records one avfoundation **Aggregate Device** (mic + system audio via BlackHole) through the `pan=` downmix. One hardware clock, so it's perfectly synced — but routing system audio requires a BlackHole multi-output as the system output, which **disables the volume keys**, and a meeting app grabbing the mic can starve the aggregate. Tune with `[recording].device_index` / `pan_filter`. Use it only if you'd rather not build the Swift helper; `ownscribe` is better for recording on speakers.
 
 ## Diarization (speaker labels) — opt-in
 
-Set `DIARIZE=1` and provide `HF_TOKEN` in `config.sh`. Transcripts then carry `[SPEAKER_xx]` labels + timestamps, produced by [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (pyannote.audio 4) in the same `asr/asr.py` helper that does the transcription: mlx-whisper emits the chunks, community-1 emits the speaker turns, and murmur merges them by timestamp — grouping consecutive same-speaker chunks. It tracks whole turns instead of flip-flopping mid-sentence on a mono meeting mix.
+Set `diarize = true` and provide `hf_token` under `[asr]` in `murmur.toml`. Transcripts then carry `[SPEAKER_xx]` labels + timestamps, produced by [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (pyannote.audio 4) in the same `asr/asr.py` helper that does the transcription: mlx-whisper emits the chunks, community-1 emits the speaker turns, and murmur merges them by timestamp — grouping consecutive same-speaker chunks. It tracks whole turns instead of flip-flopping mid-sentence on a mono meeting mix.
 
 The model is gated: accept the [community-1](https://hf.co/pyannote/speaker-diarization-community-1) conditions on HuggingFace once, then:
-```sh
-export DIARIZE=1
-# export DIARIZE_NUM_SPEAKERS=3     # optional hint when you know the headcount (0 = auto)
+```toml
+[asr]
+diarize = true
+hf_token = "hf_xxx"
+# num_speakers = 3     # optional hint when you know the headcount (0 = auto)
 ```
 The ASR venv (set up in **Install**) already has `pyannote.audio` — no separate environment. If diarization fails (missing token, gated model, MPS issue), the run degrades to a plain transcript rather than losing the meeting.
 
 ## Obsidian vault archiving (optional)
 
-Set `OBSIDIAN_VAULT` (and optionally `VAULT_FOLDER`, default `Murmur`) in `config.sh` and each finished summary is **copied** into your vault, organized by month:
+Set `root` (and optionally `folder`, default `Murmur`) under `[vault]` in `murmur.toml` and each finished summary is **copied** into your vault, organized by month:
 
 ```
-<OBSIDIAN_VAULT>/Murmur/2026-06/2026-06-18 16-21-05 <generated title>.md
+<vault root>/Murmur/2026-06/2026-06-18 16-21-05 <generated title>.md
 ```
 
 The originals in `$MEETINGS_BASE/summaries` stay the source of truth — the vault is a derived view (summaries only; transcripts aren't copied). Each note gets a short title — produced as the summary's own first heading, so archiving needs no extra model call (older, title-less summaries fall back to a dedicated title call). The title is also used in the filename (`:`→`-` for macOS/Obsidian safety), alongside YAML frontmatter:
@@ -161,18 +171,18 @@ tags: [meeting, murmur]
 ---
 ```
 
-Archiving replaces any prior note for the same recording (matched on the `YYYY-MM-DD HH-MM-SS` prefix — second precision, so two recordings that start in the same minute stay distinct), so reprocessing refreshes the vault without leaving duplicates, and it's best-effort — a vault/iCloud hiccup is logged but never fails the local job. Leave `OBSIDIAN_VAULT` empty to disable.
+Archiving replaces any prior note for the same recording (matched on the `YYYY-MM-DD HH-MM-SS` prefix — second precision, so two recordings that start in the same minute stay distinct), so reprocessing refreshes the vault without leaving duplicates, and it's best-effort — a vault/iCloud hiccup is logged but never fails the local job. Leave `[vault].root` empty to disable.
 
 ## Notes
 
-- Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Capture is mono 16 kHz PCM; recordings are archived as mono 16 kHz **FLAC** (lossless, ~half the size).
-- **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
-- On `stop`, murmur measures the finished recording's level and warns (notification + log) if it's effectively silent. Usual causes: a routing slip (e.g. system output not on the BlackHole multi-output on the `ffmpeg` backend) or a muted/grabbed mic. Threshold: `RECORD_SILENCE_DB` (default `-80` dBFS).
+- Recording is hard-capped at `max_duration_seconds` (default 2h). Capture is mono 16 kHz PCM; recordings are archived as mono 16 kHz **FLAC** (lossless, ~half the size).
+- **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `[recording].pan_filter` in `murmur.toml` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
+- On `stop`, murmur measures the finished recording's level and warns (notification + log) if it's effectively silent. Usual causes: a routing slip (e.g. system output not on the BlackHole multi-output on the `ffmpeg` backend) or a muted/grabbed mic. Threshold: `[recording].silence_db` (default `-80` dBFS).
 - The `asr/asr.py` helper reads the recording read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
 - Each pipeline stage streams to its own log under `logs/`: recording → `meeting-<ts>.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses), and an ollama failure → `summary-<base>.log` (the failing response body). The daemon's own stdout/stderr go to `daemon.{out,err}.log` (`murmur logs`).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
-- `config.sh` is the only shell file — it's just environment configuration (and a convenient hook for sourcing secrets). All logic is TypeScript in `src/`.
+- `murmur.toml` is the one config file (parsed by Bun's native TOML loader); `launchd/run-daemon.sh` is the only shell script — it just resolves the log path via `murmur print-env` before `exec`ing the daemon. The legacy `config.sh` is still honored as a fallback. All logic is TypeScript in `src/`.
 
 ## Development
 

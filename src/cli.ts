@@ -6,7 +6,7 @@
 import { basename, dirname, join } from "node:path";
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { userInfo } from "node:os";
-import { loadConfig, type Config } from "./config.ts";
+import { loadConfig, configAsEnv, type Config } from "./config.ts";
 import { isRecordingFile, stripAudioExt } from "./paths.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
@@ -115,6 +115,11 @@ function die(msg: string): never {
   process.exit(1);
 }
 
+/** Single-quote a value for safe `eval` in a POSIX shell (the only metachar inside '' is '). */
+function shQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
 const DAEMON_LABEL = "com.jank.murmur.daemon";
 
 /** Enqueue a resolved wav via the daemon, or process it inline when the daemon is down. */
@@ -149,7 +154,7 @@ async function daemonctl(cfg: Config, action: "start" | "stop" | "restart" | "in
     const tmpl = join(cfg.repoDir, "launchd", `${DAEMON_LABEL}.plist.example`);
     if (!existsSync(tmpl)) die(`plist template not found: ${tmpl}`);
     // Render the machine paths from the running environment (process.execPath is this very
-    // bun) so there's nothing to hand-edit; run-daemon.sh derives the log path from config.sh.
+    // bun) so there's nothing to hand-edit; run-daemon.sh derives the log path via print-env.
     const rendered = readFileSync(tmpl, "utf8")
       .replaceAll("__REPO__", cfg.repoDir)
       .replaceAll("__HOME__", userInfo().homedir)
@@ -187,7 +192,7 @@ Usage: murmur <command> [args]
   record [--device N]      start recording (system audio + your mic)
   stop                     stop the current recording
   process [audio]          transcribe + summarize (newest, or by path/basename)
-  import                   pull new recordings from external sources (sources.json) into inbox/
+  import                   pull new recordings from external sources (see murmur.toml) into inbox/
   reprocess <name>         re-run the pipeline for one recording (incl. from failed/)
   retry-failed             re-enqueue every recording in recordings/failed/
   transcribe [audio]       transcribe only → prints transcript path
@@ -198,6 +203,7 @@ Usage: murmur <command> [args]
   doctor                   check setup (venv, ffmpeg, ollama+model, ownscribe, …) → non-zero on problems
   logs [failures] [-f]     tail the daemon logs (or process-failures.log); -f to follow
   daemon <sub>             run | start | stop | restart | install (manage the LaunchAgent)
+  print-env                resolved config as shell exports (used by run-daemon.sh)
 
 Stateful commands use the daemon if it's running, else act directly.`;
 
@@ -336,7 +342,7 @@ switch (cmd) {
     // next boot's reconcile) picks them up exactly like a normal recording.
     const summary = await runImport(cfg);
     if (summary.sources.length === 0) {
-      console.log("no enabled sources — create sources.json (see sources.json.example)");
+      console.log("no enabled sources — add a [[sources]] block to murmur.toml (see murmur.toml.example)");
       break;
     }
     let totalImported = 0;
@@ -411,6 +417,14 @@ switch (cmd) {
     const md = await summarize(cfg, txt, sig);
     await archiveSummary(cfg, basename(txt, ".txt"), sig).catch((e) => console.error(`archive: ${String(e)}`));
     console.log(md);
+    break;
+  }
+
+  case "print-env": {
+    // The resolved config as shell exports. launchd/run-daemon.sh evals this to find the log
+    // dir (MEETINGS_BASE) without sourcing config.sh — so it works for murmur.toml too. Also a
+    // handy "what config is actually in effect?" for debugging.
+    for (const [k, v] of Object.entries(configAsEnv(cfg))) process.stdout.write(`export ${k}=${shQuote(v)}\n`);
     break;
   }
 

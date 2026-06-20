@@ -1,4 +1,5 @@
 {
+  "_comment": "LEGACY. Import sources now live in murmur.toml under [[sources]] (see murmur.toml.example). sources.json is read only as a fallback when murmur.toml is absent.",
   "sources": [
     {
       "name": "just-press-record",

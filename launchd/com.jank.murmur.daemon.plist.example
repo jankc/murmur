@@ -30,7 +30,7 @@
   </dict>
 
   <!-- No StandardOut/ErrorPath: run-daemon.sh redirects the daemon's stdout/stderr to
-       $MEETINGS_BASE/logs/daemon.{out,err}.log, derived from config.sh. -->
+       $MEETINGS_BASE/logs/daemon.{out,err}.log, from the resolved config (`murmur print-env`). -->
 
   <key>ProcessType</key>
   <string>Background</string>

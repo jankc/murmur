@@ -54,7 +54,7 @@ async function loadLedger(cfg: Config): Promise<Ledger> {
 export async function runImport(cfg: Config): Promise<ImportSummary> {
   const sources = loadSources(cfg);
   if (sources.length === 0) {
-    log.info("import", "no enabled sources (see sources.json) — nothing to do");
+    log.info("import", "no enabled sources (see murmur.toml [[sources]]) — nothing to do");
     return { sources: [] };
   }
   mkdirSync(cfg.paths.inboxDir, { recursive: true });

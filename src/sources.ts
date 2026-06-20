@@ -7,6 +7,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
 import type { Storage } from "./materialize.ts";
+import { readMurmurToml, expandHome } from "./tomlconfig.ts";
 import { parseStamp } from "./stamp.ts";
 import { log } from "./log.ts";
 
@@ -32,16 +33,6 @@ export interface Candidate {
   storage: Storage;
 }
 
-const HOME = process.env.HOME ?? "";
-
-/** Expand a leading `~/` (only) to $HOME. Literal `~` inside the path — e.g. the
- *  `iCloud~com~…` container name — is left untouched. */
-function expandHome(p: string): string {
-  if (p === "~") return HOME;
-  if (p.startsWith("~/")) return join(HOME, p.slice(2));
-  return p;
-}
-
 /** Build a murmur basename from a path that matches a 6-group (Y M D H Mi S) timestamp regex.
  *  Returns null if the pattern doesn't match or yields a malformed stamp. Pure — unit-tested. */
 export function basenameFromRelpath(relpath: string, pattern: string): string | null {
@@ -57,25 +48,40 @@ export function basenameFromRelpath(relpath: string, pattern: string): string | 
   return parseStamp(base) ? base : null; // validate the assembled stamp is well-formed
 }
 
-/** Read and validate `<repoDir>/sources.json`. Returns enabled sources only; an absent file
- *  or a malformed entry is logged and skipped rather than fatal. */
-export function loadSources(cfg: Config): FolderSource[] {
+/** The raw `sources` array, from murmur.toml's `[[sources]]` when present, else the legacy
+ *  sources.json. Same shape either way (Bun parses TOML tables into plain objects), so the
+ *  validation below is shared. An absent/malformed file is logged and yields no sources. */
+function readRawSources(cfg: Config): Array<Partial<FolderSource>> {
+  const toml = readMurmurToml(cfg.repoDir);
+  if (toml) {
+    const raw = (toml as { sources?: unknown }).sources;
+    if (raw === undefined) return []; // murmur.toml with no [[sources]] — import simply unconfigured
+    if (!Array.isArray(raw)) {
+      log.warn("import", `murmur.toml: "sources" is not an array of tables`);
+      return [];
+    }
+    return raw as Array<Partial<FolderSource>>;
+  }
   const file = join(cfg.repoDir, "sources.json");
   if (!existsSync(file)) return [];
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(file, "utf8"));
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { sources?: unknown };
+    if (!Array.isArray(parsed.sources)) {
+      log.warn("import", `sources.json has no "sources" array`);
+      return [];
+    }
+    return parsed.sources as Array<Partial<FolderSource>>;
   } catch (err) {
     log.error("import", `could not parse sources.json: ${String(err)}`);
     return [];
   }
-  const raw = (parsed as { sources?: unknown }).sources;
-  if (!Array.isArray(raw)) {
-    log.warn("import", `sources.json has no "sources" array`);
-    return [];
-  }
+}
+
+/** Read and validate the configured sources (murmur.toml or sources.json). Returns enabled
+ *  sources only; a malformed entry is logged and skipped rather than fatal. */
+export function loadSources(cfg: Config): FolderSource[] {
   const out: FolderSource[] = [];
-  for (const s of raw as Array<Partial<FolderSource>>) {
+  for (const s of readRawSources(cfg)) {
     if (s.enabled === false) continue;
     if (s.type !== "folder") {
       log.warn("import", `source "${s.name ?? "?"}": unknown type "${s.type}" — skipped`);

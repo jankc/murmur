@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# The preferred config file is now murmur.toml (see murmur.toml.example), which also holds the
+# import sources. config.sh is still read, LAYERED UNDERNEATH murmur.toml (env > murmur.toml >
+# config.sh > defaults) — so murmur.toml wins per-key, and config.sh fills only what it omits.
+# That makes config.sh the right home for a *sourced* secret (e.g. HF_TOKEN from a secrets
+# manager) you'd rather keep out of murmur.toml; for plain config, prefer murmur.toml.
+#
 # Copy to config.sh (gitignored) and edit. Only MEETINGS_BASE + MODEL_SUMMARY are
 # required; everything else has sane defaults baked into src/config.ts.
 

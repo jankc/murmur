@@ -1,0 +1,83 @@
+# murmur configuration — the single source of truth. Copy to murmur.toml (gitignored) and edit.
+# Only meetings_base + [summary].model are required; every other key shown is its default,
+# commented out. Uncomment and change what you need.
+#
+# Paths may start with "~/" (expanded to your home). No other shell expansion is done (no $PWD,
+# no $VAR) — write absolute paths elsewhere.
+#
+# Precedence (highest first): environment variable (e.g. set in the launchd plist) > this file >
+# the legacy config.sh > built-in defaults. So config.sh still works underneath: it's the place
+# to keep a *sourced* secret (e.g. HF_TOKEN pulled from a secrets manager) out of this file —
+# anything config.sh sets that murmur.toml doesn't is used as-is. Likewise sources.json is read
+# only when this file has no [[sources]].
+#
+# TOML note: bare top-level keys (below) must come BEFORE any [table] header — once a [table]
+# starts, every following key belongs to it.
+
+meetings_base = "~/Recordings/Meetings"
+# port = 7461                      # localhost control API port
+# process_timeout_seconds = 7200   # per-stage wall-clock backstop (kills a wedged ASR/ollama job)
+
+# A shell command run at startup to populate the environment — the home for a secret you'd rather
+# not store in this file. murmur runs it with `set -a` (so exports are captured) and keeps any
+# recognised var it sets (currently HF_TOKEN). It's arbitrary shell, so source a cache or call a
+# secrets manager. Use a '...' literal string so embedded "..." need no escaping; an array of
+# commands also works. Examples:
+#   secrets_command = '[ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"'
+#   secrets_command = 'export HF_TOKEN="$(op read op://Private/HuggingFace/token)"'
+
+[summary]
+model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.g. gemma4:26b-mlx)
+                                   # are custom LOCAL MLX builds, not pullable — `ollama create` them.
+# ollama_host = "http://localhost:11434"   # set if ollama is remote or on a non-default port
+# prompt_file = ""                 # empty = repo prompts/summary.md (which instructs Czech output —
+                                   # point elsewhere to change the summary language/style)
+
+[asr]
+# model = "mlx-community/whisper-large-v3-turbo"   # mlx-whisper model (hf repo)
+# language = "auto"                # auto-detect per recording; set "cs"/"en"/… to force.
+                                   # Forcing a language drops speech in OTHER languages — leave on
+                                   # auto for bilingual (e.g. cs+en) meetings.
+# python = "~/.local/share/murmur/asr-venv/bin/python"   # asr venv python
+# Diarization (speaker labels) — OFF by default. Needs a HuggingFace token + accepting the
+# pyannote community-1 terms; the asr venv already has pyannote.audio.
+# diarize = false
+# hf_token = "hf_xxx"
+# num_speakers = 0                 # speaker-count hint; 0 = auto-detect
+
+[vault]
+# Obsidian archiving — OFF unless root is set. Each finished summary is copied into the vault as
+#   <folder>/<YYYY-MM>/<YYYY-MM-DD HH-MM> <generated title>.md  (with YAML frontmatter).
+# Originals stay under meetings_base; the vault is a derived copy.
+# root = "~/Library/Mobile Documents/iCloud~md~obsidian/Documents/<Vault>"
+# folder = "Murmur"
+
+[recording]
+# Backend (see README → Recording backends):
+#   ownscribe — system tap + mic, host-time-synced, keeps volume keys (recommended)
+#   ffmpeg    — one avfoundation Aggregate Device (default; needs a BlackHole multi-output)
+# backend = "ffmpeg"
+# max_duration_seconds = 7200      # 2h hard cap
+# silence_db = -80                 # warn on stop if a track's peak dBFS is at/below this
+# ownscribe backend:
+# ownscribe_bin = "~/.local/bin/ownscribe-audio"   # build: see README → Recording backends
+# ffmpeg backend — avfoundation index of your Aggregate Device
+#   (find it: ffmpeg -f avfoundation -list_devices true -i ""):
+# device_index = "0"
+# Downmix to mono. Default layout: c0+c1 = BlackHole (system audio), c2 = mic. Override if your
+# Aggregate Device orders its sub-devices differently (a wrong map = mute/lopsided capture).
+# pan_filter = "pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter"
+
+# External recording sources for `murmur import` (was sources.json). Each [[sources]] is a
+# generic "folder" adapter: root + glob + a 6-group (Y M D H Mi S) timestamp regex over the file's
+# path-relative-to-root + storage ("icloud" materialises evicted files first, "none" = plain
+# local). Add more [[sources]] blocks for more sources; set enabled = false to disable one.
+# Example below: Just Press Record (iPhone → iCloud).
+# [[sources]]
+# name = "just-press-record"
+# type = "folder"
+# root = "~/Library/Mobile Documents/iCloud~com~openplanetsoftware~just-press-record/Documents"
+# glob = "*/*.m4a"
+# storage = "icloud"
+# enabled = true
+# timestamp = { from = "path", pattern = "(\\d{4})-(\\d{2})-(\\d{2})/(\\d{2})-(\\d{2})-(\\d{2})" }
