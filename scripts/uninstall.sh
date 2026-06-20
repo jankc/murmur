@@ -15,6 +15,6 @@ rm -f "$HOME/.local/bin/murmur"
 echo
 echo "==> done. Left in place (remove by hand if desired):"
 echo "    - recordings/transcripts/summaries:  \$MEETINGS_BASE"
-echo "    - config:                            config.sh"
+echo "    - config:                            murmur.toml"
 echo "    - ASR venv:                          ~/.local/share/murmur/asr-venv"
 echo "    - capture binary:                    ~/.local/bin/ownscribe-audio"

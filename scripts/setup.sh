@@ -5,18 +5,18 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_DIR"
 
-echo "==> config.sh"
-if [ ! -f config.sh ]; then
-  cp config.sh.example config.sh
-  echo "    created config.sh from example — edit MEETINGS_BASE / MODEL_SUMMARY before first use"
+echo "==> murmur.toml"
+if [ ! -f murmur.toml ]; then
+  cp murmur.toml.example murmur.toml
+  echo "    created murmur.toml from example — edit meetings_base / [summary].model before first use"
 else
   echo "    exists"
 fi
 
 echo "==> ASR venv (mlx-whisper + pyannote.audio)"
-# Honor a MURMUR_PYTHON set in config.sh — the CLI sources config.sh later, so setup must
-# agree on the venv path or `murmur doctor`/ASR break after a "successful" setup.
-if [ -f config.sh ]; then set +eu; . ./config.sh; set -eu; fi
+# Honor a python set under [asr] in murmur.toml — resolve it via the CLI (the same loader the
+# daemon uses) so setup agrees on the venv path; else doctor/ASR break after a "successful" setup.
+eval "$(bun run "$REPO_DIR/src/cli.ts" print-env 2>/dev/null || true)"
 VENV_PY="${MURMUR_PYTHON:-$HOME/.local/share/murmur/asr-venv/bin/python}"
 VENV_DIR="$(dirname "$(dirname "$VENV_PY")")"
 command -v uv >/dev/null 2>&1 || { echo "    ERROR: uv not found — brew install uv"; exit 1; }

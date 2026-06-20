@@ -1,8 +1,7 @@
-// Load configuration, layered env > murmur.toml > shell layer > defaults. murmur.toml is the
-// primary config file; the shell layer underneath (the legacy config.sh and/or murmur.toml's
-// secrets_command) fills gaps — chiefly a sourced secret like HF_TOKEN — and an environment
-// variable always wins (e.g. the launchd plist). Produces one frozen Config.
-import { existsSync } from "node:fs";
+// Load configuration, layered env > murmur.toml > secrets_command > defaults. murmur.toml is the
+// single config file; its secrets_command (arbitrary shell) fills gaps — chiefly a sourced secret
+// like HF_TOKEN, kept out of the file — and an environment variable always wins (e.g. the launchd
+// plist). Produces one frozen Config.
 import { join, dirname, delimiter } from "node:path";
 import { buildPaths, type Paths } from "./paths.ts";
 import { truthy, parseNum } from "./util.ts";
@@ -44,8 +43,8 @@ export interface Config {
 
 const REPO_DIR = join(import.meta.dir, "..");
 
-// Keys we pull from the shell layer (config.sh / secrets_command), in a fixed order, NUL-separated
-// so values with spaces survive intact.
+// Keys we capture from secrets_command's environment, in a fixed order, NUL-separated so values
+// with spaces survive intact.
 const KEYS = [
   "MEETINGS_BASE",
   "MODEL_SUMMARY",
@@ -95,23 +94,17 @@ function secretsCommandOf(toml: Record<string, unknown> | null): string | undefi
   return undefined;
 }
 
-// The "shell layer": run the legacy config.sh (if present) and the configured secrets_command,
-// then capture the KEYS they exported. `set -a` exports bare assignments too, and printf is always
-// the final command so a benign non-zero line (e.g. an absent secrets file) can't abort startup.
-// The secrets_command is arbitrary shell — `source a-cache`, `op read …`, `pass show …`, etc. —
-// run in a subshell purely to populate the environment; only recognised vars (HF_TOKEN, …) are
-// kept. Returns {} without spawning bash when there's nothing to run.
-function sourceShellEnv(repoDir: string, secretsCommand: string | undefined): RawEnv {
-  const configSh = join(repoDir, "config.sh");
-  const hasConfigSh = existsSync(configSh);
-  if (!hasConfigSh && !secretsCommand) return {};
-  const parts = ["set -a"];
-  if (hasConfigSh) parts.push(`. "${configSh}"`);
-  if (secretsCommand) parts.push(secretsCommand);
-  parts.push(`printf '%s\\0' ${KEYS.map((k) => `"\${${k}-}"`).join(" ")}`);
-  const res = Bun.spawnSync(["bash", "-c", parts.join("; ")], { stdout: "pipe", stderr: "pipe" });
+// Run murmur.toml's secrets_command and capture the KEYS it exported. The command is arbitrary
+// shell — `source a-cache`, `op read …`, `pass show …`, etc. — run in a subshell purely to
+// populate the environment; only recognised vars (HF_TOKEN, …) are kept. `set -a` exports bare
+// assignments too, and printf is always the final command so a benign non-zero line (e.g. an
+// absent secrets file) can't abort startup. Returns {} without spawning bash when no command is set.
+function secretsEnv(secretsCommand: string | undefined): RawEnv {
+  if (!secretsCommand) return {};
+  const script = `set -a; ${secretsCommand}; printf '%s\\0' ${KEYS.map((k) => `"\${${k}-}"`).join(" ")}`;
+  const res = Bun.spawnSync(["bash", "-c", script], { stdout: "pipe", stderr: "pipe" });
   if (res.exitCode !== 0) {
-    throw new Error(`failed to load shell config/secrets: ${res.stderr.toString()}`);
+    throw new Error(`secrets_command failed: ${res.stderr.toString()}`);
   }
   const values = res.stdout.toString().split("\0");
   const raw: RawEnv = {};
@@ -122,10 +115,9 @@ function sourceShellEnv(repoDir: string, secretsCommand: string | undefined): Ra
   return raw;
 }
 
-// murmur.toml uses grouped, idiomatic tables; map them onto the flat KEYS so the rest of
-// loadConfig is identical whether the values came from TOML or config.sh. Path-valued keys get a
-// leading "~/" expanded (TOML does no shell expansion). An empty value means "unset" (→ default),
-// matching sourceConfigSh's behaviour.
+// murmur.toml uses grouped, idiomatic tables; map them onto the flat KEYS used throughout
+// loadConfig. Path-valued keys get a leading "~/" expanded (TOML does no shell expansion). An
+// empty value means "unset" (→ default).
 function tomlToRawEnv(toml: Record<string, any>): RawEnv {
   const asr = (toml.asr ?? {}) as Record<string, any>;
   const summary = (toml.summary ?? {}) as Record<string, any>;
@@ -182,13 +174,12 @@ function buildChildPath(pythonBin: string): string {
 }
 
 export function loadConfig(repoDir: string = REPO_DIR): Config {
-  // Layered: env > murmur.toml > shell layer (config.sh + secrets_command) > defaults. murmur.toml
-  // is the primary config; the shell layer underneath only fills what the TOML omits — which is
-  // where a *sourced* secret (e.g. HF_TOKEN from a secrets manager) belongs, kept out of the config
-  // proper. The bash spawn is skipped entirely when there's neither a config.sh nor a command.
+  // Layered: env > murmur.toml > secrets_command > defaults. murmur.toml is the config; the env
+  // exported by its secrets_command fills only what the TOML omits — which is where a *sourced*
+  // secret (e.g. HF_TOKEN from a secrets manager) belongs, kept out of the config proper.
   const parsedToml = readMurmurToml(repoDir);
   const tomlRaw: RawEnv = parsedToml ? tomlToRawEnv(parsedToml) : {};
-  const shRaw: RawEnv = sourceShellEnv(repoDir, secretsCommandOf(parsedToml));
+  const shRaw: RawEnv = secretsEnv(secretsCommandOf(parsedToml));
   const pick = (key: (typeof KEYS)[number], fallback: string): string =>
     process.env[key] ?? tomlRaw[key] ?? shRaw[key] ?? fallback;
 

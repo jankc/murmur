@@ -1,6 +1,4 @@
 murmur.toml
-config.sh
-sources.json
 *.app/
 data/
 recordings/

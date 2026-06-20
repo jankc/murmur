@@ -1,7 +1,7 @@
-// Single-file configuration. <repoDir>/murmur.toml is the primary source for both daemon settings
-// (read by config.ts) and import sources (read by sources.ts). The legacy config.sh is layered
-// underneath in config.ts (env > murmur.toml > config.sh > defaults); legacy sources.json is read
-// only when murmur.toml defines no [[sources]]. Parsed via Bun's native TOML loader — no dependency.
+// Single-file configuration. <repoDir>/murmur.toml is the source for both daemon settings (read by
+// config.ts) and import sources (read by sources.ts). Secrets are kept out of it via its
+// secrets_command (run by config.ts), so the file itself stays plain config. Parsed via Bun's
+// native TOML loader — no dependency.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,9 +16,9 @@ export function expandHome(p: string): string {
   return p;
 }
 
-/** Parse <repoDir>/murmur.toml, or return null if the file is absent (→ caller falls back to the
- *  legacy config.sh / sources.json). A malformed file throws: a typo in the single source of
- *  truth must be loud, not silently swallowed into all-defaults. */
+/** Parse <repoDir>/murmur.toml, or return null if the file is absent (→ caller uses built-in
+ *  defaults). A malformed file throws: a typo in the single source of truth must be loud, not
+ *  silently swallowed into all-defaults. */
 export function readMurmurToml(repoDir: string): Record<string, unknown> | null {
   const file = join(repoDir, "murmur.toml");
   if (!existsSync(file)) return null;

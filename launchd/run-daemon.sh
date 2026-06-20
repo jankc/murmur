@@ -2,11 +2,10 @@
 # launchd entrypoint for the murmur daemon.
 #
 # launchd does no variable expansion in plists, so StandardOutPath/StandardErrorPath can't
-# reference $MEETINGS_BASE. This wrapper resolves the config — murmur.toml (the single source of
-# truth) or the legacy config.sh — via `murmur print-env`, derives the log location from
-# MEETINGS_BASE, and execs the daemon with stdout/stderr redirected there. `exec` replaces this
-# shell with bun, so there's no lingering process and launchd's KeepAlive tracks the daemon
-# directly.
+# reference $MEETINGS_BASE. This wrapper resolves the config (murmur.toml) via `murmur print-env`,
+# derives the log location from MEETINGS_BASE, and execs the daemon with stdout/stderr redirected
+# there. `exec` replaces this shell with bun, so there's no lingering process and launchd's
+# KeepAlive tracks the daemon directly.
 #
 # Relocating the meetings base is then just: edit murmur.toml + restart the daemon.
 

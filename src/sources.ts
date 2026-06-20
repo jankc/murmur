@@ -3,7 +3,7 @@
 // a storage backend, which covers Just Press Record and most synced-folder cases. A future
 // app that hides its data in a DB (e.g. Voice Memos) would add its own `type` + enumerate()
 // here — the import engine, materialiser, and ledger stay unchanged.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
 import type { Storage } from "./materialize.ts";
@@ -48,37 +48,22 @@ export function basenameFromRelpath(relpath: string, pattern: string): string | 
   return parseStamp(base) ? base : null; // validate the assembled stamp is well-formed
 }
 
-/** The raw `sources` array, from murmur.toml's `[[sources]]` when present, else the legacy
- *  sources.json. Same shape either way (Bun parses TOML tables into plain objects), so the
- *  validation below is shared. An absent/malformed file is logged and yields no sources. */
+/** The raw `sources` array from murmur.toml's `[[sources]]` (Bun parses TOML tables into plain
+ *  objects, matching the FolderSource shape). No murmur.toml or no [[sources]] → import is simply
+ *  unconfigured (no sources). */
 function readRawSources(cfg: Config): Array<Partial<FolderSource>> {
   const toml = readMurmurToml(cfg.repoDir);
-  if (toml) {
-    const raw = (toml as { sources?: unknown }).sources;
-    if (raw === undefined) return []; // murmur.toml with no [[sources]] — import simply unconfigured
-    if (!Array.isArray(raw)) {
-      log.warn("import", `murmur.toml: "sources" is not an array of tables`);
-      return [];
-    }
-    return raw as Array<Partial<FolderSource>>;
-  }
-  const file = join(cfg.repoDir, "sources.json");
-  if (!existsSync(file)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as { sources?: unknown };
-    if (!Array.isArray(parsed.sources)) {
-      log.warn("import", `sources.json has no "sources" array`);
-      return [];
-    }
-    return parsed.sources as Array<Partial<FolderSource>>;
-  } catch (err) {
-    log.error("import", `could not parse sources.json: ${String(err)}`);
+  const raw = (toml as { sources?: unknown } | null)?.sources;
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    log.warn("import", `murmur.toml: "sources" is not an array of tables`);
     return [];
   }
+  return raw as Array<Partial<FolderSource>>;
 }
 
-/** Read and validate the configured sources (murmur.toml or sources.json). Returns enabled
- *  sources only; a malformed entry is logged and skipped rather than fatal. */
+/** Read and validate the configured sources (murmur.toml `[[sources]]`). Returns enabled sources
+ *  only; a malformed entry is logged and skipped rather than fatal. */
 export function loadSources(cfg: Config): FolderSource[] {
   const out: FolderSource[] = [];
   for (const s of readRawSources(cfg)) {

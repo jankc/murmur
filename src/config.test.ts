@@ -1,6 +1,6 @@
-// Tests for the murmur.toml loader: the grouped-TOML → Config mapping, the legacy config.sh
-// fallback, [[sources]] parsing, and the print-env round-trip. loadConfig/loadSources take a
-// repoDir, so each test points them at a temp dir with its own config file.
+// Tests for the murmur.toml loader: the grouped-TOML → Config mapping, secrets_command, defaults
+// when no file is present, [[sources]] parsing, and the print-env round-trip. loadConfig/
+// loadSources take a repoDir, so each test points them at a temp dir with its own murmur.toml.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -116,29 +116,14 @@ silence_db = -40
   });
 });
 
-describe("legacy config.sh fallback (no murmur.toml)", () => {
-  test("config.sh is still read when murmur.toml is absent", () => {
-    const dir = tmpRepo({ "config.sh": `export MEETINGS_BASE="/legacy/base"\nexport MODEL_SUMMARY="legacy-model"\n` });
+describe("no config file", () => {
+  test("an empty repo dir yields all built-in defaults (no crash, no shell spawn)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "murmur-none-"));
     try {
       const cfg = loadConfig(dir);
-      expect(cfg.meetingsBase).toBe("/legacy/base");
-      expect(cfg.modelSummary).toBe("legacy-model");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("layered: murmur.toml wins per-key, config.sh fills the gaps (the secret-overlay case)", () => {
-    const dir = tmpRepo({
-      "murmur.toml": `meetings_base = "/from/toml"\n[summary]\nmodel = "toml-model"\n`,
-      // config.sh re-declares MEETINGS_BASE (shadowed by toml) and supplies a key toml omits —
-      // exactly how a sourced HF_TOKEN keeps flowing after you move config into murmur.toml.
-      "config.sh": `export MEETINGS_BASE="/from/sh"\nexport HF_TOKEN="from-secrets-cache"\n`,
-    });
-    try {
-      const cfg = loadConfig(dir);
-      expect(cfg.meetingsBase).toBe("/from/toml"); // toml wins where both set it
-      expect(cfg.hfToken).toBe("from-secrets-cache"); // config.sh fills what toml omits
+      expect(cfg.modelSummary).toBe("gemma4:26b-mlx"); // the built-in default
+      expect(cfg.recordBackend).toBe("ffmpeg");
+      expect(cfg.port).toBe(7461);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -190,7 +175,7 @@ timestamp = { from = "path", pattern = "x" }
 });
 
 describe("secrets_command (a shell hook in murmur.toml)", () => {
-  test("runs the command and captures the env it exports — no config.sh needed", () => {
+  test("runs the command and captures the env it exports", () => {
     const dir = tmpRepo({ "murmur.toml": `meetings_base = "/p"\nsecrets_command = 'export HF_TOKEN=tok-from-cmd'\n\n[summary]\nmodel = "m"\n` });
     try {
       expect(loadConfig(dir).hfToken).toBe("tok-from-cmd");

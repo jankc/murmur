@@ -70,7 +70,7 @@ secrets_command = 'export HF_TOKEN="$(op read op://Private/HuggingFace/token)"'
 # or: secrets_command = '[ -f "$HOME/.secrets-cache" ] && source "$HOME/.secrets-cache"'
 ```
 
-> Precedence is **env > `murmur.toml` > shell layer > defaults**, where the *shell layer* is `secrets_command` plus the legacy `config.sh` (still sourced if present). `sources.json` is likewise read only when `murmur.toml` defines no `[[sources]]`. So an older `config.sh`/`sources.json` setup keeps working, and a sourced secret fills in underneath your config. An environment variable (e.g. in the launchd plist) overrides everything.
+> Precedence is **env > `murmur.toml` > `secrets_command` env > defaults**: a secret exported by `secrets_command` fills in underneath the config, and an environment variable (e.g. set in the launchd plist) overrides everything.
 
 ## Usage — the `murmur` CLI
 
@@ -188,7 +188,7 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 - Each pipeline stage streams to its own log under `logs/`: recording → `meeting-<ts>.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses), and an ollama failure → `summary-<base>.log` (the failing response body). The daemon's own stdout/stderr go to `daemon.{out,err}.log` (`murmur logs`).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
-- `murmur.toml` is the one config file (parsed by Bun's native TOML loader); `launchd/run-daemon.sh` is the only shell script — it just resolves the log path via `murmur print-env` before `exec`ing the daemon. The legacy `config.sh` is still honored as a fallback. All logic is TypeScript in `src/`.
+- `murmur.toml` is the one config file (parsed by Bun's native TOML loader); `launchd/run-daemon.sh` is the only shell script — it just resolves the log path via `murmur print-env` before `exec`ing the daemon. All logic is TypeScript in `src/`.
 
 ## Development
 

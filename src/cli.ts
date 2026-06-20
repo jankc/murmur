@@ -422,8 +422,8 @@ switch (cmd) {
 
   case "print-env": {
     // The resolved config as shell exports. launchd/run-daemon.sh evals this to find the log
-    // dir (MEETINGS_BASE) without sourcing config.sh — so it works for murmur.toml too. Also a
-    // handy "what config is actually in effect?" for debugging.
+    // dir (MEETINGS_BASE) without re-parsing murmur.toml in shell. Also a handy "what config is
+    // actually in effect?" for debugging.
     for (const [k, v] of Object.entries(configAsEnv(cfg))) process.stdout.write(`export ${k}=${shQuote(v)}\n`);
     break;
   }

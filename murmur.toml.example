@@ -6,10 +6,8 @@
 # no $VAR) — write absolute paths elsewhere.
 #
 # Precedence (highest first): environment variable (e.g. set in the launchd plist) > this file >
-# the legacy config.sh > built-in defaults. So config.sh still works underneath: it's the place
-# to keep a *sourced* secret (e.g. HF_TOKEN pulled from a secrets manager) out of this file —
-# anything config.sh sets that murmur.toml doesn't is used as-is. Likewise sources.json is read
-# only when this file has no [[sources]].
+# built-in defaults. A secret exported by secrets_command (below) fills in underneath, so you can
+# keep e.g. HF_TOKEN out of this file.
 #
 # TOML note: bare top-level keys (below) must come BEFORE any [table] header — once a [table]
 # starts, every following key belongs to it.
@@ -68,7 +66,7 @@ model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.
 # Aggregate Device orders its sub-devices differently (a wrong map = mute/lopsided capture).
 # pan_filter = "pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter"
 
-# External recording sources for `murmur import` (was sources.json). Each [[sources]] is a
+# External recording sources for `murmur import`. Each [[sources]] is a
 # generic "folder" adapter: root + glob + a 6-group (Y M D H Mi S) timestamp regex over the file's
 # path-relative-to-root + storage ("icloud" materialises evicted files first, "none" = plain
 # local). Add more [[sources]] blocks for more sources; set enabled = false to disable one.
