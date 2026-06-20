@@ -51,7 +51,7 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   }
 
   // Resolve the actual stored recording once — for the duration and the frontmatter source
-  // pointer (a recording murmur produced is .flac; a .wav input is archived as .wav).
+  // pointer (a recording murmur produced is .flac; an imported one keeps its own format).
   const audioPath = await locate(cfg, base); // inbox during processing, processed/ afterwards
   const sourceName = audioPath ? basename(audioPath) : `${base}${CANONICAL_AUDIO_EXT}`;
   const speakers = await countSpeakers(cfg, base);
@@ -122,13 +122,11 @@ async function countSpeakers(cfg: Config, base: string): Promise<number> {
   return new Set((await t.text()).match(/SPEAKER_\d+/g) ?? []).size;
 }
 
-/** Human duration (H:MM:SS / M:SS) of the stored recording, or null if unknown. FLAC is
- *  compressed (size ≠ length), so probe it with ffprobe; a raw-PCM .wav (mono 16 kHz
- *  s16le, 44-byte header) is exact from file size with no subprocess. */
+/** Human duration (H:MM:SS / M:SS) of the stored recording, or null if unknown. Probe with
+ *  ffprobe — it works for any container (FLAC/m4a/mp3/wav), and unlike a file-size shortcut it
+ *  stays correct regardless of an imported file's sample rate or channel count. */
 async function durationOf(cfg: Config, audioPath: string): Promise<string | null> {
-  const seconds = audioPath.toLowerCase().endsWith(".wav")
-    ? Math.max(0, (Bun.file(audioPath).size - 44) / 32000)
-    : await probeDurationSeconds(cfg, audioPath);
+  const seconds = await probeDurationSeconds(cfg, audioPath);
   if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) return null;
   const s = Math.round(seconds);
   const p = (n: number) => String(n).padStart(2, "0");

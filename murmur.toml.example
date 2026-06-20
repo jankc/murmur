@@ -70,7 +70,8 @@ model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.
 # generic "folder" adapter: root + glob + a 6-group (Y M D H Mi S) timestamp regex over the file's
 # path-relative-to-root + storage ("icloud" materialises evicted files first, "none" = plain
 # local). Add more [[sources]] blocks for more sources; set enabled = false to disable one.
-# Example below: Just Press Record (iPhone → iCloud).
+# Imported files are copied into inbox/ in their original format (m4a, mp3, …) — they are NOT
+# transcoded; only murmur's own captures are FLAC. Example below: Just Press Record (iPhone → iCloud).
 # [[sources]]
 # name = "just-press-record"
 # type = "folder"

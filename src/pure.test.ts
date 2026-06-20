@@ -40,9 +40,11 @@ describe("stamp", () => {
 });
 
 describe("audio extension helpers", () => {
-  test("isRecordingFile accepts FLAC and WAV, rejects others", () => {
-    expect(isRecordingFile("meeting-2026-06-18_16-21-05.flac")).toBe(true);
+  test("isRecordingFile accepts supported audio formats, rejects others", () => {
+    expect(isRecordingFile("meeting-2026-06-18_16-21-05.flac")).toBe(true); // murmur's own capture
     expect(isRecordingFile("meeting-2026-06-18_16-21-05.wav")).toBe(true);
+    expect(isRecordingFile("meeting-2026-06-18_16-21-05.m4a")).toBe(true); // imported, kept as-is
+    expect(isRecordingFile("meeting-2026-06-18_16-21-05.mp3")).toBe(true);
     // Case-SENSITIVE: an uppercase ext is rejected, so we never pick up a file locate() (which
     // builds lowercase paths) couldn't then find on a case-sensitive volume.
     expect(isRecordingFile("MEETING.FLAC")).toBe(false);
@@ -54,9 +56,9 @@ describe("audio extension helpers", () => {
 
   test("stripAudioExt removes a known audio extension and nothing else", () => {
     expect(stripAudioExt("meeting-2026-06-18_16-21-05.flac")).toBe("meeting-2026-06-18_16-21-05");
-    expect(stripAudioExt("meeting-2026-06-18_16-21-05.wav")).toBe("meeting-2026-06-18_16-21-05");
+    expect(stripAudioExt("meeting-2026-06-18_16-21-05.m4a")).toBe("meeting-2026-06-18_16-21-05");
     expect(stripAudioExt("meeting-2026-06-18_16-21-05")).toBe("meeting-2026-06-18_16-21-05"); // no-op
-    expect(stripAudioExt("notes.m4a")).toBe("notes.m4a"); // not a recognized recording ext
+    expect(stripAudioExt("notes.txt")).toBe("notes.txt"); // not a recording extension
     expect(stripAudioExt("a.b.flac")).toBe("a.b"); // only the trailing ext is stripped
   });
 });

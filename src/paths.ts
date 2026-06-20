@@ -6,23 +6,24 @@
 //   recordings/failed/     — a non-retryable failure (moved here so it doesn't retry-loop)
 import { join } from "node:path";
 
-// Canonical archived audio format. murmur writes FLAC: lossless (identical ASR accuracy) at
-// ~half the size of 16 kHz mono s16le WAV. WAV is also an accepted recording format — a `.wav`
-// in inbox/ (a dropped input, or the older back catalogue) is picked up, processed, and archived
-// as-is — so route extension logic through isRecordingFile()/stripAudioExt(), not a hardcoded ext.
-export const CANONICAL_AUDIO_EXT = ".flac"; // what NEW recordings are written as
-export const KNOWN_AUDIO_EXTS = [".flac", ".wav"] as const; // recognised when scanning/locating
+// murmur's OWN recordings are written as FLAC: lossless (identical ASR accuracy) at ~half the size
+// of 16 kHz mono s16le WAV. But the pipeline (whisper + pyannote, both ffmpeg-backed) is format-
+// agnostic, so inbox/ accepts any of these common audio formats — `murmur import` and hand-dropped
+// files keep their original container (re-encoding an already-compressed m4a/mp3 to FLAC just
+// bloats it). Route extension logic through isRecordingFile()/stripAudioExt(), not a hardcoded ext.
+export const CANONICAL_AUDIO_EXT = ".flac"; // what murmur's OWN captures are written as
+export const KNOWN_AUDIO_EXTS = [".flac", ".wav", ".m4a", ".mp3", ".aac", ".ogg", ".opus", ".aiff"] as const;
 
-// Matching is case-SENSITIVE (lowercase only). Every producer (recorder, importer) emits
-// lowercase .flac/.wav, and locate() builds lowercase paths/globs — accepting an uppercase ext
-// here would let the watcher pick up a file that locate()/move() then can't find on a
-// case-sensitive volume (it would loop in inbox, reprocessed on every restart).
-/** True if a filename is a recording we should pick up (FLAC, or WAV input). */
+// Matching is case-SENSITIVE (lowercase only). Every recording filename is a lowercase ext, and
+// locate() builds lowercase paths/globs — accepting an uppercase ext here would let the watcher
+// pick up a file that locate()/move() then can't find on a case-sensitive volume (it would loop
+// in inbox, reprocessed on every restart).
+/** True if a filename is a recording we should pick up (any supported audio format). */
 export function isRecordingFile(name: string): boolean {
   return KNOWN_AUDIO_EXTS.some((e) => name.endsWith(e));
 }
 
-/** Strip a known recording extension to get the bare basename (no-op if none matches). */
+/** Strip a recognized recording extension to get the bare basename (no-op if none matches). */
 export function stripAudioExt(name: string): string {
   const ext = KNOWN_AUDIO_EXTS.find((e) => name.endsWith(e));
   return ext ? name.slice(0, -ext.length) : name;
@@ -54,8 +55,8 @@ export interface Paths {
   importLedger: string; // `murmur import` dedup cache (id → {size, basename, importedAt})
   failureLog: string;
   // Per-recording derived paths. There's deliberately no processed/failed builder: those folders
-  // hold a mix of FLAC and WAV, so callers must resolve via recordings.ts locate()/move()
-  // (which check both extensions) rather than assume one.
+  // hold a mix of formats (FLAC captures + imports), so callers must resolve via recordings.ts
+  // locate()/move() (which check every known extension) rather than assume one.
   partialWav: (basename: string) => string; // raw PCM capture target (always .wav)
   inboxWav: (basename: string) => string; // canonical artifact target (.flac) for NEW recordings
   transcript: (basename: string) => string;
@@ -96,8 +97,8 @@ export function buildPaths(base: string): Paths {
     // .partial/ holds the raw PCM capture — stays WAV (maximally crash-salvageable); it's
     // transcoded to canonical FLAC at the .partial→inbox boundary, never archived as-is.
     partialWav: (b: string) => join(partialDir, `${b}.wav`),
-    // Canonical inbox target (FLAC) for a NEW recording. A `.wav` (input, or back catalogue) in
-    // inbox/failed/processed is resolved by recordings.ts locate(), which checks both exts.
+    // Inbox target for murmur's OWN captures (FLAC). Imported recordings keep their own extension
+    // and are resolved (in inbox/failed/processed) by recordings.ts locate(), which checks all.
     inboxWav: (b: string) => join(inboxDir, `${b}${CANONICAL_AUDIO_EXT}`),
     transcript: (b: string) => join(transcriptsDir, `${b}.txt`),
     summary: (b: string) => join(summariesDir, `${b}.md`),

@@ -1,21 +1,22 @@
 // `murmur import` engine: a pure producer that feeds external recordings into the pipeline.
-// For each configured source it diffs the on-disk files against a ledger, materialises +
-// transcodes only the new ones, and atomically drops meeting-<stamp>.flac into inbox/. From
-// there the existing watcher/queue/worker take over unchanged. It touches only inbox/, its
-// scratch dir, and the ledger — never the queue, worker, daemon, or failed/.
+// For each configured source it diffs the on-disk files against a ledger, materialises only the
+// new ones, and atomically drops meeting-<stamp>.<ext> into inbox/ — keeping the source's own
+// format (m4a/mp3/…). Imports are NOT transcoded: re-encoding already-compressed audio to FLAC
+// just bloats it, and the pipeline (whisper + pyannote) reads any format. Only murmur's own
+// captures are FLAC. From inbox/ the existing watcher/queue/worker take over unchanged; this
+// touches only inbox/, its scratch dir, and the ledger — never the queue, worker, daemon, failed/.
 //
 // Crash/dedup safety has two layers: the ledger (keyed by stable-id + size) skips re-work,
 // and a locate() backstop skips anything already in inbox/processed/failed — so a lost ledger
 // or a mid-run crash can never double-import, only re-discover.
 import { mkdirSync, rmSync } from "node:fs";
-import { rename } from "node:fs/promises";
-import { join } from "node:path";
+import { copyFile, rename } from "node:fs/promises";
+import { extname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { readJson, writeJsonAtomic } from "./state.ts";
 import { loadSources, enumerate } from "./sources.ts";
 import { ensureLocal } from "./materialize.ts";
-import { transcodeToFlac16k } from "./transcode.ts";
-import { CANONICAL_AUDIO_EXT } from "./paths.ts";
+import { isRecordingFile } from "./paths.ts";
 import { locate } from "./recordings.ts";
 import { log } from "./log.ts";
 
@@ -85,16 +86,27 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
         continue;
       }
 
-      const tmp = join(cfg.paths.importTmpDir, `${c.basename}${CANONICAL_AUDIO_EXT}`);
-      if (!(await transcodeToFlac16k(cfg, c.srcPath, tmp))) {
+      // Copy the source verbatim (no transcode), keeping its extension. Copy to scratch first,
+      // then atomic-rename into inbox/ (same filesystem) so the watcher never sees a partial file.
+      const ext = extname(c.srcPath).toLowerCase();
+      const name = `${c.basename}${ext}`;
+      const tmp = join(cfg.paths.importTmpDir, name);
+      rmSync(tmp, { force: true });
+      try {
+        await copyFile(c.srcPath, tmp);
+      } catch (err) {
+        log.error("import", `could not copy ${c.id}: ${String(err)}`);
         rmSync(tmp, { force: true });
         failed++;
         continue;
       }
-
-      // Atomic rename into inbox/ (same filesystem) — the watcher never sees a partial file.
+      if (!isRecordingFile(name)) {
+        // Imported anyway (bytes are safe in inbox/), but the watcher only auto-picks up known
+        // extensions — surface the gap rather than leaving a silent no-op file.
+        log.warn("import", `${c.id}: "${ext || "no extension"}" isn't in KNOWN_AUDIO_EXTS — won't be auto-processed until you add it`);
+      }
       try {
-        await rename(tmp, cfg.paths.inboxWav(c.basename));
+        await rename(tmp, join(cfg.paths.inboxDir, name));
       } catch (err) {
         log.error("import", `could not finalize ${c.basename}: ${String(err)}`);
         rmSync(tmp, { force: true });
@@ -103,7 +115,7 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
       }
       ledger.items[c.id] = { size: c.size, basename: c.basename, importedAt: Date.now() };
       imported++;
-      log.info("import", `imported ${c.id} → inbox/${c.basename}${CANONICAL_AUDIO_EXT}`);
+      log.info("import", `imported ${c.id} → inbox/${name}`);
     }
 
     summaries.push({ name: src.name, scanned: candidates.length, imported, failed });

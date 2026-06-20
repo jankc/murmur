@@ -94,7 +94,7 @@ Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`r
 
 ## The daemon (automatic processing)
 
-The daemon watches `recordings/inbox/` and runs each new recording (FLAC, or WAV) through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand. Done recordings move to `processed/<YYYY-MM>/` (see [folder = state](#murmur) above).
+The daemon watches `recordings/inbox/` and runs each new recording — a FLAC capture, or any imported/dropped-in audio file (m4a, mp3, wav, …) — through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand. Done recordings move to `processed/<YYYY-MM>/` (see [folder = state](#murmur) above).
 
 Run it always-on via the LaunchAgent:
 ```sh
@@ -181,7 +181,7 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 
 ## Notes
 
-- Recording is hard-capped at `max_duration_seconds` (default 2h). Capture is mono 16 kHz PCM; recordings are archived as mono 16 kHz **FLAC** (lossless, ~half the size).
+- Recording is hard-capped at `max_duration_seconds` (default 2h). Capture is mono 16 kHz PCM, archived as mono 16 kHz **FLAC** (lossless, ~half the size). Imported recordings (`murmur import` / dropped into `inbox/`) are kept in their original format — already-compressed audio (m4a, mp3, …) isn't re-encoded.
 - **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `[recording].pan_filter` in `murmur.toml` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
 - On `stop`, murmur measures the finished recording's level and warns (notification + log) if it's effectively silent. Usual causes: a routing slip (e.g. system output not on the BlackHole multi-output on the `ffmpeg` backend) or a muted/grabbed mic. Threshold: `[recording].silence_db` (default `-80` dBFS).
 - The `asr/asr.py` helper reads the recording read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
