@@ -1,0 +1,42 @@
+name: Check capture upstream
+
+# Lightweight notify-only: weekly (and on demand), compares the pinned commit in
+# capture/UPSTREAM against upstream ownscribe's HEAD and opens a GitHub issue when it
+# has moved, so you know to run scripts/sync-capture.sh. No macOS runner, no PR
+# automation, no third-party actions. Delete this file if you'd rather not be notified.
+
+on:
+  schedule:
+    - cron: "0 7 * * 1" # Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Notify if upstream moved
+        run: |
+          set -euo pipefail
+          get() { grep -E "^$1=" capture/UPSTREAM | head -1 | cut -d= -f2- || true; }
+          repo="$(get repo)"
+          pinned="$(get commit)"
+          sha="$(git ls-remote "$repo" HEAD | cut -f1)"
+          if [ "$sha" = "$pinned" ]; then
+            echo "Up to date at $sha."
+            exit 0
+          fi
+          echo "Upstream moved: $pinned -> $sha"
+          title="Vendored ownscribe-audio is behind upstream"
+          if gh issue list --state open --search "$title" --json title --jq '.[].title' | grep -Fxq "$title"; then
+            echo "Open issue already exists - nothing to do."
+            exit 0
+          fi
+          body=$'Upstream ownscribe (paberr/ownscribe) has new commits on the vendored capture source.\n\nPinned commit:  '"$pinned"$'\nUpstream HEAD:  '"$sha"$'\n\nUpdate locally:\n  scripts/sync-capture.sh           (dry run - review the diff)\n  scripts/sync-capture.sh --apply   (re-vendor + rebuild)\n  cp capture/bin/ownscribe-audio ~/.local/bin/ownscribe-audio\n\nSee capture/README.md for details.'
+          gh issue create --title "$title" --body "$body"

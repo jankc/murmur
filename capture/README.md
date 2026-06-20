@@ -17,7 +17,7 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
 ## Provenance
 
 - **Upstream:** https://github.com/paberr/ownscribe (the `swift/` subproject)
-- **Commit:** `5a5d501f700f82d10175a6caa36d72267769f7ec` (2026-06-02)
+- **Pinned commit:** see [`UPSTREAM`](UPSTREAM) — the single source of truth, updated by the sync tooling below
 - **License:** MIT, © 2026 Pascal Berrang — see `LICENSE` (kept per the MIT terms)
 
 `Sources/AudioCapture.swift` is byte-for-byte upstream. The only change from upstream
@@ -26,8 +26,21 @@ to its source instead of in a repo-root `bin/`. Upstream's `Package.swift` is **
 vendored: it under-links frameworks (only CoreAudio + AudioToolbox) and `swift build`
 fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
 
-To re-sync with a newer upstream, diff `Sources/AudioCapture.swift` against
-`swift/Sources/AudioCapture.swift` at the new commit and update the hash above.
+## Keeping in sync
+
+[`UPSTREAM`](UPSTREAM) pins the exact commit this mirror is taken from. Two ways to update:
+
+- **On demand (the updater):** `scripts/sync-capture.sh` fetches upstream and prints the
+  diff; re-run with `--apply` to copy the new source, bump `UPSTREAM`, and rebuild. Pass a
+  ref to target a specific branch/tag/commit (default: upstream `main`).
+- **Notification (optional):** `.github/workflows/check-capture-upstream.yml` runs weekly
+  and opens an issue when upstream moves past the pinned commit. Delete it if unwanted.
+
+`Sources/AudioCapture.swift` and `LICENSE` track upstream verbatim and sync blindly.
+`build.sh` is **not** auto-synced (we deviate on `BIN_DIR`) — the script only *diffs* it,
+so an upstream change to frameworks/flags surfaces for you to reconcile by hand.
+
+After any sync, redeploy the binary: `cp capture/bin/ownscribe-audio ~/.local/bin/`.
 
 ## Build
 

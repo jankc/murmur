@@ -1,0 +1,7 @@
+# Pinned upstream for the vendored ownscribe-audio capture helper.
+# Single source of truth for the sync tooling (scripts/sync-capture.sh + the
+# sync-capture GitHub workflow). See README.md in this directory.
+repo=https://github.com/paberr/ownscribe
+ref=main
+commit=5a5d501f700f82d10175a6caa36d72267769f7ec
+swift_path=swift/Sources/AudioCapture.swift
