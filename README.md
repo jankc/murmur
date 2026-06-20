@@ -110,10 +110,9 @@ Set `RECORD_BACKEND` in `config.sh`:
 
 **`ownscribe`** (recommended) — one helper captures system audio (ScreenCaptureKit) **and** your mic, then merges them **host-time-aligned** on stop. No BlackHole, no aggregate, no output routing → **the macOS volume keys keep working**; and because the two streams are time-synced, the mic's unavoidable speaker bleed reads as "emphasized voice," not an echo. Best for capturing both sides on speakers.
 
-Build the helper once ([ownscribe-audio](https://github.com/paberr/ownscribe), MIT, macOS 14.2+; needs the Xcode Command Line Tools, `xcode-select --install`; first run prompts for Screen Recording permission):
+Build the helper once (the Swift source is vendored in [`capture/`](capture/), from [ownscribe](https://github.com/paberr/ownscribe), MIT, macOS 14.2+; needs the Xcode Command Line Tools, `xcode-select --install`; first run prompts for Screen Recording permission):
 ```sh
-git clone https://github.com/paberr/ownscribe && cd ownscribe/swift
-bash build.sh && cp ../bin/ownscribe-audio ~/.local/bin/ownscribe-audio
+bash capture/build.sh && cp capture/bin/ownscribe-audio ~/.local/bin/ownscribe-audio
 ```
 ```sh
 export RECORD_BACKEND=ownscribe

@@ -6,4 +6,5 @@ transcripts/
 summaries/
 logs/
 node_modules/
+capture/bin/
 .DS_Store
