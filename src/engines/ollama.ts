@@ -92,7 +92,8 @@ export async function generateTitle(cfg: Config, summaryText: string, signal: Ab
   ].join("\n");
   const res = await fetch(`${cfg.ollamaHost}/api/generate`, {
     method: "POST",
-    signal,
+    // Same backstop as summarize() — a wedged title request must not hang the archive stage.
+    signal: AbortSignal.any([signal, AbortSignal.timeout(cfg.processTimeoutSeconds * 1000)]),
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: cfg.modelSummary, prompt, stream: false, think: false, options: { temperature: 0 } }),
   });

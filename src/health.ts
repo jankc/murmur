@@ -17,6 +17,8 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
     checks.push({ name, ok, detail, level });
 
   add("config.sh", await fileOk(`${cfg.repoDir}/config.sh`), `${cfg.repoDir}/config.sh`, "warn");
+  // PROMPT_FILE is read on every non-trivial summarize — a missing override silently breaks it.
+  add("summary prompt", await fileOk(cfg.promptFile), cfg.promptFile);
   add("asr venv python", await fileOk(cfg.pythonBin), cfg.pythonBin);
 
   const ffmpeg = Bun.which("ffmpeg", { PATH: cfg.childPath });

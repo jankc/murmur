@@ -14,6 +14,8 @@ import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
 import { resolveWav, move } from "./recordings.ts";
+import { EngineError } from "./engines/errors.ts";
+import { logFailure } from "./failures.ts";
 import { PauseStore } from "./jobstate.ts";
 import { sleep } from "./util.ts";
 import { offlineSnapshot, renderStatus, type StatusSnapshot } from "./status.ts";
@@ -71,14 +73,24 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
   const signal = new AbortController().signal;
   // Process unconditionally, overwriting any prior outputs — same as the daemon worker.
   const txt = cfg.paths.transcript(base);
-  await transcribe(cfg, job, signal);
   const md = cfg.paths.summary(base);
-  await summarize(cfg, txt, signal);
-  await archiveSummary(cfg, base, signal).catch((e) => console.error(`archive: ${String(e)}`));
-  // Reached only on success (transcribe/summarize throw on failure): retire the wav to
-  // processed/ so inbox stays pending-only, exactly as the daemon worker does.
-  await move(cfg, base, "processed");
-  return { txt, md };
+  let stage = "transcribe";
+  try {
+    await transcribe(cfg, job, signal);
+    stage = "summarize";
+    await summarize(cfg, txt, signal);
+    await archiveSummary(cfg, base, signal).catch((e) => console.error(`archive: ${String(e)}`));
+    // Success: retire the wav to processed/ so inbox stays pending-only, like the worker.
+    await move(cfg, base, "processed");
+    return { txt, md };
+  } catch (err) {
+    // Mirror the daemon worker's failure path: record the failure and move the wav to
+    // failed/ so an inline failure doesn't leave it sitting in inbox/ or processed/ untracked.
+    const code = err instanceof EngineError ? err.exitCode : 1;
+    await logFailure(cfg, base, stage, code, wavPath);
+    await move(cfg, base, "failed");
+    throw err;
+  }
 }
 
 function die(msg: string): never {
@@ -272,7 +284,7 @@ switch (cmd) {
     const arg = positional();
     const wav = arg ? await resolveWav(cfg, arg) : newestRecording(cfg);
     if (!wav) die(`no recording found${arg ? `: ${arg}` : ""}`);
-    await dispatchWav(wav);
+    try { await dispatchWav(wav); } catch (e) { die(`processing failed: ${String(e)}`); }
     break;
   }
 
@@ -281,7 +293,7 @@ switch (cmd) {
     if (!arg) die("usage: murmur reprocess <name|path>");
     const wav = await resolveWav(cfg, arg);
     if (!wav) die(`recording not found: ${arg}`);
-    await dispatchWav(wav);
+    try { await dispatchWav(wav); } catch (e) { die(`processing failed: ${String(e)}`); }
     break;
   }
 
@@ -297,7 +309,17 @@ switch (cmd) {
       break;
     }
     console.log(`retrying ${names.length} failed recording(s)…`);
-    for (const n of names) await dispatchWav(cfg.paths.failedWav(basename(n, ".wav")));
+    const stillFailing: string[] = [];
+    for (const n of names) {
+      // Don't let one bad recording (inline path) abort the rest — catch, continue, report.
+      try {
+        await dispatchWav(cfg.paths.failedWav(basename(n, ".wav")));
+      } catch (e) {
+        stillFailing.push(n);
+        console.error(`  ✗ ${n}: ${String(e)}`);
+      }
+    }
+    if (stillFailing.length > 0) die(`\n${stillFailing.length}/${names.length} still failing`);
     break;
   }
 
