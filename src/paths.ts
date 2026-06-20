@@ -13,16 +13,18 @@ import { join } from "node:path";
 export const CANONICAL_AUDIO_EXT = ".flac"; // what NEW recordings are written as
 export const KNOWN_AUDIO_EXTS = [".flac", ".wav"] as const; // recognised when scanning/locating
 
+// Matching is case-SENSITIVE (lowercase only). Every producer (recorder, importer) emits
+// lowercase .flac/.wav, and locate() builds lowercase paths/globs — accepting an uppercase ext
+// here would let the watcher pick up a file that locate()/move() then can't find on a
+// case-sensitive volume (it would loop in inbox, reprocessed on every restart).
 /** True if a filename is a recording we should pick up (canonical FLAC, or a legacy WAV). */
 export function isRecordingFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  return KNOWN_AUDIO_EXTS.some((e) => lower.endsWith(e));
+  return KNOWN_AUDIO_EXTS.some((e) => name.endsWith(e));
 }
 
 /** Strip a known recording extension to get the bare basename (no-op if none matches). */
 export function stripAudioExt(name: string): string {
-  const lower = name.toLowerCase();
-  const ext = KNOWN_AUDIO_EXTS.find((e) => lower.endsWith(e));
+  const ext = KNOWN_AUDIO_EXTS.find((e) => name.endsWith(e));
   return ext ? name.slice(0, -ext.length) : name;
 }
 

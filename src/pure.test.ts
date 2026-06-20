@@ -43,7 +43,9 @@ describe("audio extension helpers", () => {
   test("isRecordingFile accepts canonical FLAC and legacy WAV, rejects others", () => {
     expect(isRecordingFile("meeting-2026-06-18_16-21-05.flac")).toBe(true);
     expect(isRecordingFile("meeting-2026-06-18_16-21-05.wav")).toBe(true);
-    expect(isRecordingFile("MEETING.FLAC")).toBe(true); // case-insensitive
+    // Case-SENSITIVE: an uppercase ext is rejected, so we never pick up a file locate() (which
+    // builds lowercase paths) couldn't then find on a case-sensitive volume.
+    expect(isRecordingFile("MEETING.FLAC")).toBe(false);
     expect(isRecordingFile("meeting.txt")).toBe(false);
     expect(isRecordingFile("meeting.md")).toBe(false);
     expect(isRecordingFile("meeting-2026-06-18_16-21-05.partial")).toBe(false);

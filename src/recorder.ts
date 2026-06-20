@@ -49,6 +49,15 @@ interface RecordingState {
   parts: RecordingPart[];
 }
 
+// Outcome of finalizing a capture. "failed" means audio WAS captured but encode/rename failed:
+// the raw capture is kept AND the caller must keep recording.json so the 10s orphan sweep
+// retries — we never silently drop a real meeting (especially ownscribe's .oa.wav, which the
+// stray-recovery path deliberately ignores).
+type FinalizeResult =
+  | { status: "moved"; path: string }
+  | { status: "empty" } // nothing usable captured — safe to clear state
+  | { status: "failed" }; // recoverable failure — keep state + raw for a retry
+
 export class MeetingRecorder implements Recorder {
   constructor(private cfg: Config) {}
 
@@ -136,11 +145,19 @@ export class MeetingRecorder implements Recorder {
     for (let i = 0; i < 600 && st.parts.some((p) => alive(p.pid)); i++) await sleep(100); // ~60s cap
     for (const p of st.parts) if (alive(p.pid)) { try { process.kill(p.pid, "SIGKILL"); } catch {} }
 
-    const moved = await this.finalizeState(st);
-    this.clearState();
+    const result = await this.finalizeState(st);
+    // Keep recording.json on a recoverable failure so the daemon's 10s orphan sweep retries
+    // finalize (the capture pids are already dead, so isRecording() stays false meanwhile).
+    if (result.status !== "failed") this.clearState();
     notify(this.cfg, "Meeting recording stopped");
     log.info("recorder", `stopped recording [${st.backend}]`);
 
+    if (result.status === "failed") {
+      const w = "recording stopped, but finalizing failed — raw capture kept; it will retry automatically (or run `murmur stop` again)";
+      log.error("recorder", w);
+      return { ok: false, message: w };
+    }
+    const moved = result.status === "moved" ? result.path : null;
     let message = moved ? `recording stopped → ${moved}` : "recording stopped (no audio captured)";
     // Both backends produce a single merged track → check the final file's level.
     if (moved) {
@@ -169,32 +186,32 @@ export class MeetingRecorder implements Recorder {
         return null; // in progress
       }
       log.info("recorder", `recovering interrupted recording ${st.base}`);
-      const moved = await this.finalizeState(st);
-      this.clearState();
-      return moved;
+      const result = await this.finalizeState(st);
+      if (result.status !== "failed") this.clearState(); // keep state to retry a failed finalize
+      return result.status === "moved" ? result.path : null;
     }
     // No active recording: transcode any stray raw capture left in .partial/ (defensive).
     return this.moveStrayPartial();
   }
 
   /** Transcode the raw capture (parts[0]) → canonical 16 kHz mono FLAC and atomically move it
-   *  into inbox/. Returns the inbox path, or null if nothing usable was captured / encode fails. */
-  private async finalizeState(st: RecordingState): Promise<string | null> {
+   *  into inbox/. See FinalizeResult: "failed" keeps the raw capture for the caller to retry. */
+  private async finalizeState(st: RecordingState): Promise<FinalizeResult> {
     const capture = st.parts[0]?.file;
     if (!capture || !existsSync(capture) || statSync(capture).size === 0) {
       log.warn("recorder", `${st.base}: no audio captured`);
       this.cleanupTemps(st);
-      return null;
+      return { status: "empty" };
     }
     // Encode FLAC into a temp in .partial/ (not the watched inbox/), then atomic-rename — so the
     // watcher never sees a half-written file. Encode runs only once the capture is complete.
     const tmp = join(this.cfg.paths.partialDir, `${st.base}.flac`);
     if (!(await transcodeToFlac16k(this.cfg, capture, tmp))) {
       rmSync(tmp, { force: true });
-      // Keep the raw capture — never lose the only copy of the meeting on a transient ffmpeg
-      // hiccup. cleanupTemps is intentionally NOT called here.
-      log.error("recorder", `${st.base}: transcode failed — kept raw capture ${capture}; recover with: ffmpeg -i "${capture}" -ac 1 -ar 16000 -c:a flac "<out>.flac"`);
-      return null;
+      // Keep the raw capture (and, via the caller, the state) so finalize retries — never lose
+      // the only copy of the meeting on a transient ffmpeg hiccup. No cleanupTemps here.
+      log.error("recorder", `${st.base}: transcode failed — kept raw capture ${capture} for retry; manual: ffmpeg -i "${capture}" -ac 1 -ar 16000 -c:a flac "<out>.flac"`);
+      return { status: "failed" };
     }
     const dest = this.cfg.paths.inboxWav(st.base); // canonical .flac
     try {
@@ -202,17 +219,24 @@ export class MeetingRecorder implements Recorder {
       renameSync(tmp, dest);
       log.info("recorder", `finalized → inbox/${basename(dest)}`);
     } catch (err) {
+      // Drop the encoded temp but keep the raw capture + state: a retry re-encodes from the raw,
+      // so an inbox rename failure can't strand the recording (esp. ownscribe's .oa.wav, which
+      // the stray-recovery path doesn't pick up).
       rmSync(tmp, { force: true });
-      log.warn("recorder", `could not finalize ${st.base}: ${String(err)}`);
-      return null;
+      log.error("recorder", `${st.base}: inbox rename failed — kept raw capture for retry: ${String(err)}`);
+      return { status: "failed" };
     }
     this.cleanupTemps(st);
-    return dest;
+    return { status: "moved", path: dest };
   }
 
-  /** Recover a stray raw capture (meeting-<stamp>.wav, PCM) left in .partial/ by a crash:
-   *  transcode it to canonical FLAC in inbox/. Never touches the backend temp tracks
-   *  (.oa.wav, *.tmp.wav) — only a complete-looking PCM capture. */
+  /** Recover a stray raw capture (meeting-<stamp>.wav, PCM) left in .partial/ when state was lost
+   *  (e.g. an ffmpeg orphan whose recording.json was never written): transcode it to canonical
+   *  FLAC in inbox/. Crucially, skip a file that's still being written — without state we can't
+   *  check pid liveness, so we use a size-stability probe; transcoding+unlinking a growing capture
+   *  would truncate it to a prefix and leave ffmpeg writing to a deleted inode. Only after a clean
+   *  encode of a quiescent file is the raw PCM removed. Never touches backend temp tracks
+   *  (.oa.wav, *.tmp.wav). */
   private async moveStrayPartial(): Promise<string | null> {
     const dir = this.cfg.paths.partialDir;
     if (!existsSync(dir)) return null;
@@ -221,14 +245,17 @@ export class MeetingRecorder implements Recorder {
       if (!/^meeting-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.wav$/.test(name)) continue;
       const src = join(dir, name);
       try {
-        if (statSync(src).size === 0) continue;
+        if (!(await this.isQuiescent(src))) {
+          log.info("recorder", `stray ${name} still growing — leaving for a later sweep`);
+          continue; // a live orphan is still writing; recover it once it's done
+        }
         const base = basename(name, ".wav");
         const tmp = join(dir, `${base}.flac`);
         if (!(await transcodeToFlac16k(this.cfg, src, tmp))) { rmSync(tmp, { force: true }); continue; }
         const dest = this.cfg.paths.inboxWav(base);
         mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
         renameSync(tmp, dest);
-        rmSync(src, { force: true }); // raw PCM consumed
+        rmSync(src, { force: true }); // raw PCM consumed (file was quiescent → no live writer)
         log.info("recorder", `finalized stray recording → inbox/${basename(dest)}`);
         last = dest;
       } catch (err) {
@@ -236,6 +263,16 @@ export class MeetingRecorder implements Recorder {
       }
     }
     return last;
+  }
+
+  /** True if `path` is nonempty and its size holds steady across a short interval — a proxy for
+   *  "no process is still writing to it" (mirrors the watcher's stable-size debounce). */
+  private async isQuiescent(path: string): Promise<boolean> {
+    let first: number;
+    try { first = statSync(path).size; } catch { return false; }
+    if (first === 0) return false;
+    await sleep(1500);
+    try { return statSync(path).size === first; } catch { return false; }
   }
 
   private cleanupTemps(st: RecordingState): void {
