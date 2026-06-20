@@ -20,6 +20,7 @@ import type { Config } from "./config.ts";
 import { notify } from "./notify.ts";
 import { sleep } from "./util.ts";
 import { log } from "./log.ts";
+import { transcodeToWav16k } from "./transcode.ts";
 
 export interface Recorder {
   isRecording(): boolean;
@@ -200,23 +201,14 @@ export class MeetingRecorder implements Recorder {
   }
 
   /** Transcode ownscribe-audio's merged 24 kHz mono float WAV to the 16 kHz mono s16le the
-   *  pipeline expects. Reports the level (the merge already synced system + mic). */
+   *  pipeline expects (the merge already synced system + mic). */
   private async transcodeOwnscribe(st: RecordingState): Promise<boolean> {
     const raw = st.parts[0]?.file;
-    if (!raw || !existsSync(raw) || statSync(raw).size === 0) {
-      log.warn("recorder", `${st.base}: no audio captured`);
+    if (!raw) {
+      log.warn("recorder", `${st.base}: no capture file to transcode`);
       return false;
     }
-    const proc = Bun.spawn(
-      ["ffmpeg", "-hide_banner", "-nostats", "-y", "-i", raw, "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", st.outWav],
-      { env: { ...process.env, PATH: this.cfg.childPath }, stdin: "ignore", stdout: "ignore", stderr: "pipe" },
-    );
-    const code = await proc.exited;
-    if (code !== 0) {
-      log.error("recorder", `transcode failed for ${st.base}: ${(await new Response(proc.stderr).text()).slice(-400)}`);
-      return false;
-    }
-    return true;
+    return transcodeToWav16k(this.cfg, raw, st.outWav);
   }
 
   private moveStrayPartial(): string | null {

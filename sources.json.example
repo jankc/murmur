@@ -1,0 +1,13 @@
+{
+  "sources": [
+    {
+      "name": "just-press-record",
+      "type": "folder",
+      "root": "~/Library/Mobile Documents/iCloud~com~openplanetsoftware~just-press-record/Documents",
+      "glob": "*/*.m4a",
+      "storage": "icloud",
+      "timestamp": { "from": "path", "pattern": "(\\d{4})-(\\d{2})-(\\d{2})/(\\d{2})-(\\d{2})-(\\d{2})" },
+      "enabled": true
+    }
+  ]
+}

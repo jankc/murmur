@@ -14,6 +14,7 @@ import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
 import { resolveWav, move } from "./recordings.ts";
+import { runImport } from "./import.ts";
 import { EngineError } from "./engines/errors.ts";
 import { logFailure } from "./failures.ts";
 import { PauseStore } from "./jobstate.ts";
@@ -185,6 +186,7 @@ Usage: murmur <command> [args]
   record [--device N]      start recording (system audio + your mic)
   stop                     stop the current recording
   process [audio]          transcribe + summarize (newest, or by path/basename)
+  import                   pull new recordings from external sources (sources.json) into inbox/
   reprocess <name>         re-run the pipeline for one recording (incl. from failed/)
   retry-failed             re-enqueue every recording in recordings/failed/
   transcribe [audio]       transcribe only → prints transcript path
@@ -325,6 +327,30 @@ switch (cmd) {
     const wav = arg ? await resolveWav(cfg, arg) : newestRecording(cfg);
     if (!wav) die(`no recording found${arg ? `: ${arg}` : ""}`);
     try { await dispatchWav(wav); } catch (e) { die(`processing failed: ${String(e)}`); }
+    break;
+  }
+
+  case "import": {
+    // Pure producer: pull new external recordings into inbox/. The daemon's watcher (or the
+    // next boot's reconcile) picks them up exactly like a normal recording.
+    const summary = await runImport(cfg);
+    if (summary.sources.length === 0) {
+      console.log("no enabled sources — create sources.json (see sources.json.example)");
+      break;
+    }
+    let totalImported = 0;
+    let totalFailed = 0;
+    for (const s of summary.sources) {
+      const skipped = s.scanned - s.imported - s.failed;
+      console.log(`${s.name}: scanned=${s.scanned} imported=${s.imported} skipped=${skipped} failed=${s.failed}`);
+      totalImported += s.imported;
+      totalFailed += s.failed;
+    }
+    if (totalImported > 0) {
+      const next = (await daemonUp()) ? "the daemon will process them" : "start the daemon or run `murmur process` to process them";
+      console.log(`\n${totalImported} recording(s) → inbox/ — ${next}.`);
+    }
+    if (totalFailed > 0) die(`\n${totalFailed} item(s) failed (will retry on the next import)`);
     break;
   }
 

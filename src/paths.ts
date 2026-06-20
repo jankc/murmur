@@ -13,6 +13,10 @@ export interface Paths {
   inboxDir: string;
   processedDir: string;
   failedDir: string;
+  // Scratch for `murmur import` (transcode external sources here, then atomic-rename into
+  // inbox/). Deliberately NOT .partial/ — recorder.moveStrayPartial() would grab a half-
+  // written meeting-*.wav from there. Same filesystem as inbox/ so the rename is atomic.
+  importTmpDir: string;
   transcriptsDir: string;
   summariesDir: string;
   logsDir: string;
@@ -24,6 +28,7 @@ export interface Paths {
   pauseFile: string;
   currentFile: string;
   lockFile: string;
+  importLedger: string; // `murmur import` dedup cache (id → {size, basename, importedAt})
   failureLog: string;
   // Per-recording derived paths.
   partialWav: (basename: string) => string;
@@ -40,6 +45,7 @@ export function buildPaths(base: string): Paths {
   const inboxDir = join(recordingsDir, "inbox");
   const processedDir = join(recordingsDir, "processed");
   const failedDir = join(recordingsDir, "failed");
+  const importTmpDir = join(recordingsDir, ".import-tmp");
   const transcriptsDir = join(base, "transcripts");
   const summariesDir = join(base, "summaries");
   const logsDir = join(base, "logs");
@@ -52,6 +58,7 @@ export function buildPaths(base: string): Paths {
     inboxDir,
     processedDir,
     failedDir,
+    importTmpDir,
     transcriptsDir,
     summariesDir,
     logsDir,
@@ -61,6 +68,7 @@ export function buildPaths(base: string): Paths {
     pauseFile: join(stateDir, "pause.json"),
     currentFile: join(stateDir, "current.json"),
     lockFile: join(stateDir, "daemon.lock"),
+    importLedger: join(stateDir, "import-ledger.json"),
     failureLog: join(logsDir, "process-failures.log"),
     partialWav: (b: string) => join(partialDir, `${b}.wav`),
     inboxWav: (b: string) => join(inboxDir, `${b}.wav`),

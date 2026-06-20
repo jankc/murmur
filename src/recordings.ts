@@ -18,10 +18,15 @@ export async function locate(cfg: Config, base: string): Promise<string | null> 
   if (await Bun.file(inbox).exists()) return inbox;
   const failed = cfg.paths.failedWav(base);
   if (await Bun.file(failed).exists()) return failed;
-  // processed/ is partitioned by month — glob for the basename.
-  const glob = new Bun.Glob(`**/${base}.wav`);
-  for await (const rel of glob.scan({ cwd: cfg.paths.processedDir })) {
-    return join(cfg.paths.processedDir, rel);
+  // processed/ is partitioned by month — glob for the basename. The dir may not exist yet
+  // (e.g. a fresh base, or `murmur import` before the daemon's first run) — that's "not there".
+  try {
+    const glob = new Bun.Glob(`**/${base}.wav`);
+    for await (const rel of glob.scan({ cwd: cfg.paths.processedDir })) {
+      return join(cfg.paths.processedDir, rel);
+    }
+  } catch {
+    /* processed/ absent → not found */
   }
   return null;
 }
