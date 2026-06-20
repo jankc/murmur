@@ -19,13 +19,6 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
   // The config file is optional (everything has a default), so a missing murmur.toml is a warn.
   const toml = `${cfg.repoDir}/murmur.toml`;
   add("config file", await fileOk(toml), `${toml} — none found, using defaults`, "warn");
-  // A leftover config.sh/sources.json from before the murmur.toml migration is no longer read —
-  // flag it so its settings don't silently sit unused (and aren't mistaken for live config).
-  for (const f of ["config.sh", "sources.json"]) {
-    if (await fileOk(`${cfg.repoDir}/${f}`)) {
-      add(`legacy ${f}`, false, `present but no longer read — fold its settings into murmur.toml, then delete it`, "warn");
-    }
-  }
   // PROMPT_FILE is read on every non-trivial summarize — a missing override silently breaks it.
   add("summary prompt", await fileOk(cfg.promptFile), cfg.promptFile);
   add("asr venv python", await fileOk(cfg.pythonBin), cfg.pythonBin);

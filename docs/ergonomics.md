@@ -19,8 +19,8 @@ upstream sync tooling, `MEETINGS_BASE`→log-path launchd wrapper, data relocati
   row. `status.ts`, `swiftbar.ts:20-37`
 - [x] **5. Docs accuracy** — (a) README's `ollama pull gemma4:26b-mlx` is unpullable; document
   the `*-mlx` models as custom local models. (b) Errors point to a nonexistent
-  "README → ASR engine" anchor. (c) `config.sh.example` omits `OLLAMA_HOST`/`PROMPT_FILE`,
-  lists phantom `AUTORECORD`/`MEETING_APPS`. `README.md`, `asr.ts:61`, `asr.py:4`, `config.sh.example`
+  "README → ASR engine" anchor. (c) the config example omitted `OLLAMA_HOST`/`PROMPT_FILE`
+  and listed phantom `AUTORECORD`/`MEETING_APPS`. `README.md`, `asr.ts:61`, `asr.py:4`
 - [x] **6. Exit-code & feedback hygiene** — `stop` exits 0 on failure; `pause`/`resume` print
   success without checking the daemon response; `-h`/`--help` exits 1. `cli.ts:101-194`
 
