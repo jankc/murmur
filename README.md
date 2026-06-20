@@ -10,7 +10,7 @@ record (system + mic) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ as
      on success the wav moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
 ```
 
-**A recording's folder is its state.** An in-progress recording stays in `recordings/.partial/` (not watched), so it never triggers the pipeline or clutters the inbox. When recording ends the finished `.wav` is moved into `recordings/inbox/` — the only folder the daemon watches. Once fully processed (transcribed → summarized → archived) it's **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves it to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur process` re-run command to `logs/process-failures.log`.
+**A recording's folder is its state.** An in-progress recording stays in `recordings/.partial/` (not watched), so it never triggers the pipeline or clutters the inbox. When recording ends the finished `.wav` is moved into `recordings/inbox/` — the only folder the daemon watches. Once fully processed (transcribed → summarized → archived) it's **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves it to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur reprocess` re-run command to `logs/process-failures.log`.
 
 ## Install
 
@@ -88,13 +88,13 @@ Run it always-on via the LaunchAgent:
 murmur daemon install        # copy the plist into ~/Library/LaunchAgents/ and start it
 murmur daemon restart        # after editing config.sh or the plist (bootout + bootstrap)
 murmur daemon stop           # ( / start )
-tail -f "$MEETINGS_BASE/logs/daemon.out.log"   # (and daemon.err.log)
+murmur logs -f               # tail the daemon logs (out + err)
 ```
 `murmur daemon restart` re-reads an edited plist (`kickstart` alone wouldn't). The daemon's log location is derived from `MEETINGS_BASE` by `launchd/run-daemon.sh`, so relocating the base needs only a `config.sh` edit + `murmur daemon restart`. The plist still hard-codes machine-specific paths — the `bun` mise install in `PATH`, the repo's `run-daemon.sh`, and the `WorkingDirectory` — so **on a new machine (or a different username/repo location) edit those**, and update the `bun` path whenever you reinstall bun.
 
 ### Control API (`http://127.0.0.1:7461`)
 
-The CLI and SwiftBar talk to this; you can too.
+The CLI and SwiftBar talk to this; you can too. Mutating routes (everything but `GET /status`) require a `Content-Type: application/json` header and reject any request carrying an `Origin` — a CSRF guard so a web page can't trigger recording over loopback. `curl` works with `-H 'content-type: application/json'`.
 
 | Method + path | Body | Effect |
 |---|---|---|
@@ -144,10 +144,10 @@ The ASR venv (set up in **Install**) already has `pyannote.audio` — no separat
 Set `OBSIDIAN_VAULT` (and optionally `VAULT_FOLDER`, default `Murmur`) in `config.sh` and each finished summary is **copied** into your vault, organized by month:
 
 ```
-<OBSIDIAN_VAULT>/Murmur/2026-06/2026-06-18 16-21 <generated title>.md
+<OBSIDIAN_VAULT>/Murmur/2026-06/2026-06-18 16-21-05 <generated title>.md
 ```
 
-The originals in `~/Recordings/Meetings/summaries` stay the source of truth — the vault is a derived view (summaries only; transcripts aren't copied). Each note gets a short title — produced as the summary's own first heading, so archiving needs no extra model call (older, title-less summaries fall back to a dedicated title call). The title is also used in the filename (`:`→`-` for macOS/Obsidian safety), alongside YAML frontmatter:
+The originals in `$MEETINGS_BASE/summaries` stay the source of truth — the vault is a derived view (summaries only; transcripts aren't copied). Each note gets a short title — produced as the summary's own first heading, so archiving needs no extra model call (older, title-less summaries fall back to a dedicated title call). The title is also used in the filename (`:`→`-` for macOS/Obsidian safety), alongside YAML frontmatter:
 
 ```yaml
 ---
@@ -161,7 +161,7 @@ tags: [meeting, murmur]
 ---
 ```
 
-Archiving replaces any prior note for the same recording (matched on the `YYYY-MM-DD HH-MM` prefix), so reprocessing refreshes the vault without leaving duplicates, and it's best-effort — a vault/iCloud hiccup is logged but never fails the local job. Leave `OBSIDIAN_VAULT` empty to disable.
+Archiving replaces any prior note for the same recording (matched on the `YYYY-MM-DD HH-MM-SS` prefix — second precision, so two recordings that start in the same minute stay distinct), so reprocessing refreshes the vault without leaving duplicates, and it's best-effort — a vault/iCloud hiccup is logged but never fails the local job. Leave `OBSIDIAN_VAULT` empty to disable.
 
 ## Notes
 
@@ -169,7 +169,7 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 - **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
 - On `stop`, murmur measures the finished recording's level and warns (notification + log) if it's effectively silent. Usual causes: a routing slip (e.g. system output not on the BlackHole multi-output on the `ffmpeg` backend) or a muted/grabbed mic. Threshold: `RECORD_SILENCE_DB` (default `-80` dBFS).
 - The `asr/asr.py` helper reads the wav read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
-- Each pipeline stage streams to its own log under `logs/`: recording → `meeting-<ts>.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses).
+- Each pipeline stage streams to its own log under `logs/`: recording → `meeting-<ts>.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses), and an ollama failure → `summary-<base>.log` (the failing response body). The daemon's own stdout/stderr go to `daemon.{out,err}.log` (`murmur logs`).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
 - `config.sh` is the only shell file — it's just environment configuration (and a convenient hook for sourcing secrets). All logic is TypeScript in `src/`.
