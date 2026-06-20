@@ -17,7 +17,7 @@ import { resolveWav, move } from "./recordings.ts";
 import { EngineError } from "./engines/errors.ts";
 import { logFailure } from "./failures.ts";
 import { PauseStore } from "./jobstate.ts";
-import { sleep } from "./util.ts";
+import { sleep, parseNum } from "./util.ts";
 import { offlineSnapshot, renderStatus, type StatusSnapshot } from "./status.ts";
 import { renderSwiftBar } from "./swiftbar.ts";
 import { runChecks } from "./health.ts";
@@ -35,6 +35,16 @@ const daemonPost = (path: string, body?: unknown) =>
     signal: AbortSignal.timeout(3000),
   });
 const daemonUp = () => daemonGet("/status").then((r) => r.ok).catch(() => false);
+
+/** One snapshot of "what is murmur doing", from the daemon if up, else from on-disk state.
+ *  Shared by the one-shot `status` and its `--watch` loop so they can't drift. */
+async function fetchStatus(cfg: Config): Promise<StatusSnapshot & { daemon: string }> {
+  const up = await daemonUp();
+  const base = up
+    ? ((await (await daemonGet("/status")).json()) as StatusSnapshot)
+    : await offlineSnapshot(cfg);
+  return { daemon: up ? "running" : "offline", ...base };
+}
 
 function flag(name: string): string | undefined {
   const i = rest.indexOf(name);
@@ -179,7 +189,7 @@ Usage: murmur <command> [args]
   retry-failed             re-enqueue every recording in recordings/failed/
   transcribe [audio]       transcribe only → prints transcript path
   summarize <transcript>   summarize a transcript → prints summary path
-  status [--json]          recording / pause / queue / failures (human; --json for tools)
+  status [--json] [--watch] recording / pause / queue / failures (--json for tools; --watch [secs] for a live view)
   pause [hard]             pause processing (soft = finish current; hard = abort + requeue)
   resume                   resume processing
   doctor                   check setup (venv, ffmpeg, ollama+model, ownscribe, …) → non-zero on problems
@@ -214,11 +224,36 @@ switch (cmd) {
   }
 
   case "status": {
-    const up = await daemonUp();
-    const base = up
-      ? ((await (await daemonGet("/status")).json()) as StatusSnapshot)
-      : await offlineSnapshot(cfg);
-    const snap = { daemon: up ? "running" : "offline", ...base };
+    const watch = rest.includes("--watch") || rest.includes("-w");
+    // A live view only makes sense on a terminal — to a pipe it'd just spew escape codes,
+    // so fall back to a single render there (and for --json, which is for machines).
+    if (watch && process.stdout.isTTY && !rest.includes("--json")) {
+      const every = Math.max(0.25, parseNum(flag("--watch") ?? flag("-w") ?? "", 2)) * 1000;
+      const showCursor = () => process.stdout.write("\x1b[?25h");
+      const onExit = () => { showCursor(); process.exit(0); };
+      process.on("SIGINT", onExit);
+      process.on("SIGTERM", onExit);
+      process.stdout.write("\x1b[?25l\x1b[2J\x1b[H"); // hide cursor + clear screen for a clean canvas
+      try {
+        for (;;) {
+          let body: string;
+          try {
+            body = renderStatus(await fetchStatus(cfg));
+          } catch (e) {
+            body = `status unavailable: ${String(e)}`;
+          }
+          const ts = new Date().toLocaleTimeString();
+          const frame = `${body}\n\n[watching every ${every / 1000}s — Ctrl-C to exit · ${ts}]`;
+          // Home, clear each line's tail (\x1b[K) as we redraw, then wipe anything below
+          // (\x1b[0J) — so a line shorter than the previous frame leaves no stale characters.
+          process.stdout.write(`\x1b[H${frame.replace(/\n/g, "\x1b[K\n")}\x1b[K\x1b[0J`);
+          await sleep(every);
+        }
+      } finally {
+        showCursor();
+      }
+    }
+    const snap = await fetchStatus(cfg);
     if (rest.includes("--json")) console.log(JSON.stringify(snap, null, 2));
     else console.log(renderStatus(snap));
     break;

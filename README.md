@@ -69,7 +69,7 @@ murmur reprocess <name>      # re-run the pipeline for one recording (incl. one 
 murmur retry-failed          # re-enqueue everything in recordings/failed/
 murmur transcribe [audio]    # transcribe only → prints transcript path
 murmur summarize <name>      # summarize a transcript → prints summary path
-murmur status [--json]       # recording / pause / queue / failures (human; --json for tools)
+murmur status [--json] [--watch [secs]]  # recording / pause / queue / failures (--json for tools; --watch for a live view, default 2s)
 murmur pause [hard]          # pause processing (soft = finish current; hard = abort + requeue)
 murmur resume
 murmur doctor                # verify setup (venv, ffmpeg, ollama+model, ownscribe, …)
