@@ -64,13 +64,7 @@ backend = "ownscribe"       # recommended (see Recording backends); omit for the
 ```
 Paths may start with `~/`. Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-community/whisper-large-v3-turbo`, language `auto`-detect, `max_duration_seconds = 7200`, …).
 
-**Keeping a secret out of the file:** instead of writing `hf_token` inline, set `secrets_command` — an arbitrary shell command murmur runs at startup (with `set -a`), capturing any recognized var it exports (currently `HF_TOKEN`). Source a cache or call a secrets manager:
-```toml
-secrets_command = 'export HF_TOKEN="$(op read op://Private/HuggingFace/token)"'
-# or: secrets_command = '[ -f "$HOME/.secrets-cache" ] && source "$HOME/.secrets-cache"'
-```
-
-> Precedence is **env > `murmur.toml` > `secrets_command` env > defaults**: a secret exported by `secrets_command` fills in underneath the config, and an environment variable (e.g. set in the launchd plist) overrides everything.
+> Precedence is **env > `murmur.toml` > defaults** — any value can be overridden by an environment variable (e.g. set in the launchd plist). `murmur.toml` is gitignored, so the `hf_token` lives there fine; if you'd rather not store it, leave it unset and export `HF_TOKEN` into the daemon's environment instead.
 
 ## Usage — the `murmur` CLI
 

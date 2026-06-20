@@ -1,7 +1,6 @@
-// Load configuration, layered env > murmur.toml > secrets_command > defaults. murmur.toml is the
-// single config file; its secrets_command (arbitrary shell) fills gaps — chiefly a sourced secret
-// like HF_TOKEN, kept out of the file — and an environment variable always wins (e.g. the launchd
-// plist). Produces one frozen Config.
+// Load configuration, layered env > murmur.toml > defaults. murmur.toml (gitignored) is the one
+// config file; an environment variable always wins (e.g. the launchd plist, or HF_TOKEN if you'd
+// rather not keep it in the file). Produces one frozen Config.
 import { join, dirname, delimiter } from "node:path";
 import { buildPaths, type Paths } from "./paths.ts";
 import { truthy, parseNum } from "./util.ts";
@@ -43,8 +42,8 @@ export interface Config {
 
 const REPO_DIR = join(import.meta.dir, "..");
 
-// Keys we capture from secrets_command's environment, in a fixed order, NUL-separated so values
-// with spaces survive intact.
+// The config keys, mapped between murmur.toml's grouped tables (tomlToRawEnv) and the resolved
+// Config (configAsEnv). The matching env-var name is the override for each.
 const KEYS = [
   "MEETINGS_BASE",
   "MODEL_SUMMARY",
@@ -82,38 +81,6 @@ function pickBackend(v: string): Config["recordBackend"] {
 }
 
 type RawEnv = Partial<Record<(typeof KEYS)[number], string>>;
-
-// Normalise murmur.toml's `secrets_command` (a shell command, or an array of them) to one script.
-function secretsCommandOf(toml: Record<string, unknown> | null): string | undefined {
-  const sc = toml?.["secrets_command"];
-  if (typeof sc === "string") return sc.trim() || undefined;
-  if (Array.isArray(sc)) {
-    const cmds = sc.filter((x): x is string => typeof x === "string" && x.trim() !== "");
-    return cmds.length ? cmds.join("\n") : undefined;
-  }
-  return undefined;
-}
-
-// Run murmur.toml's secrets_command and capture the KEYS it exported. The command is arbitrary
-// shell — `source a-cache`, `op read …`, `pass show …`, etc. — run in a subshell purely to
-// populate the environment; only recognised vars (HF_TOKEN, …) are kept. `set -a` exports bare
-// assignments too, and printf is always the final command so a benign non-zero line (e.g. an
-// absent secrets file) can't abort startup. Returns {} without spawning bash when no command is set.
-function secretsEnv(secretsCommand: string | undefined): RawEnv {
-  if (!secretsCommand) return {};
-  const script = `set -a; ${secretsCommand}; printf '%s\\0' ${KEYS.map((k) => `"\${${k}-}"`).join(" ")}`;
-  const res = Bun.spawnSync(["bash", "-c", script], { stdout: "pipe", stderr: "pipe" });
-  if (res.exitCode !== 0) {
-    throw new Error(`secrets_command failed: ${res.stderr.toString()}`);
-  }
-  const values = res.stdout.toString().split("\0");
-  const raw: RawEnv = {};
-  KEYS.forEach((k, i) => {
-    const v = values[i];
-    if (v !== undefined && v !== "") raw[k] = v;
-  });
-  return raw;
-}
 
 // murmur.toml uses grouped, idiomatic tables; map them onto the flat KEYS used throughout
 // loadConfig. Path-valued keys get a leading "~/" expanded (TOML does no shell expansion). An
@@ -174,14 +141,12 @@ function buildChildPath(pythonBin: string): string {
 }
 
 export function loadConfig(repoDir: string = REPO_DIR): Config {
-  // Layered: env > murmur.toml > secrets_command > defaults. murmur.toml is the config; the env
-  // exported by its secrets_command fills only what the TOML omits — which is where a *sourced*
-  // secret (e.g. HF_TOKEN from a secrets manager) belongs, kept out of the config proper.
+  // Layered: env > murmur.toml > defaults. murmur.toml is the one config file; an environment
+  // variable overrides it (e.g. the launchd plist, or `HF_TOKEN` if you'd rather not store it).
   const parsedToml = readMurmurToml(repoDir);
   const tomlRaw: RawEnv = parsedToml ? tomlToRawEnv(parsedToml) : {};
-  const shRaw: RawEnv = secretsEnv(secretsCommandOf(parsedToml));
   const pick = (key: (typeof KEYS)[number], fallback: string): string =>
-    process.env[key] ?? tomlRaw[key] ?? shRaw[key] ?? fallback;
+    process.env[key] ?? tomlRaw[key] ?? fallback;
 
   const home = process.env.HOME ?? "";
   const meetingsBase = pick("MEETINGS_BASE", join(home, "Recordings/Meetings"));

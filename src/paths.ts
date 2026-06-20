@@ -12,7 +12,7 @@ import { join } from "node:path";
 // files keep their original container (re-encoding an already-compressed m4a/mp3 to FLAC just
 // bloats it). Route extension logic through isRecordingFile()/stripAudioExt(), not a hardcoded ext.
 export const CANONICAL_AUDIO_EXT = ".flac"; // what murmur's OWN captures are written as
-export const KNOWN_AUDIO_EXTS = [".flac", ".wav", ".m4a", ".mp3", ".aac", ".ogg", ".opus", ".aiff"] as const;
+export const KNOWN_AUDIO_EXTS = [".flac", ".wav", ".m4a", ".m4b", ".mp3", ".aac", ".ogg", ".opus", ".aiff", ".aif", ".caf"] as const;
 
 // Matching is case-SENSITIVE (lowercase only). Every recording filename is a lowercase ext, and
 // locate() builds lowercase paths/globs — accepting an uppercase ext here would let the watcher

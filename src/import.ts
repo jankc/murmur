@@ -79,8 +79,19 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
         continue;
       }
 
-      // External failures (download/transcode) stay here — never reach murmur's failed/. Leave
-      // the item un-ledgered so the next run retries it.
+      // Reject an unsupported extension up front (before downloading or ledgering): the watcher
+      // would never enqueue it, so importing it would silently strand the file in inbox/. Count it
+      // as failed and leave it un-ledgered so it's visible and retried once the ext is whitelisted.
+      const ext = extname(c.srcPath).toLowerCase();
+      const name = `${c.basename}${ext}`;
+      if (!isRecordingFile(name)) {
+        log.warn("import", `${c.id}: "${ext || "no extension"}" isn't a supported audio format (add it to KNOWN_AUDIO_EXTS) — skipped`);
+        failed++;
+        continue;
+      }
+
+      // External failures (download) stay here — never reach murmur's failed/. Leave the item
+      // un-ledgered so the next run retries it.
       if (!(await ensureLocal(c.srcPath, c.storage))) {
         failed++;
         continue;
@@ -88,8 +99,6 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
 
       // Copy the source verbatim (no transcode), keeping its extension. Copy to scratch first,
       // then atomic-rename into inbox/ (same filesystem) so the watcher never sees a partial file.
-      const ext = extname(c.srcPath).toLowerCase();
-      const name = `${c.basename}${ext}`;
       const tmp = join(cfg.paths.importTmpDir, name);
       rmSync(tmp, { force: true });
       try {
@@ -99,11 +108,6 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
         rmSync(tmp, { force: true });
         failed++;
         continue;
-      }
-      if (!isRecordingFile(name)) {
-        // Imported anyway (bytes are safe in inbox/), but the watcher only auto-picks up known
-        // extensions — surface the gap rather than leaving a silent no-op file.
-        log.warn("import", `${c.id}: "${ext || "no extension"}" isn't in KNOWN_AUDIO_EXTS — won't be auto-processed until you add it`);
       }
       try {
         await rename(tmp, join(cfg.paths.inboxDir, name));

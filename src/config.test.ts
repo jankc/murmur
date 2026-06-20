@@ -1,6 +1,6 @@
-// Tests for the murmur.toml loader: the grouped-TOML → Config mapping, secrets_command, defaults
-// when no file is present, [[sources]] parsing, and the print-env round-trip. loadConfig/
-// loadSources take a repoDir, so each test points them at a temp dir with its own murmur.toml.
+// Tests for the murmur.toml loader: the grouped-TOML → Config mapping, env override, defaults when
+// no file is present, [[sources]] parsing, and the print-env round-trip. loadConfig/loadSources
+// take a repoDir, so each test points them at a temp dir with its own murmur.toml.
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -171,30 +171,6 @@ timestamp = { from = "path", pattern = "x" }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-});
-
-describe("secrets_command (a shell hook in murmur.toml)", () => {
-  test("runs the command and captures the env it exports", () => {
-    const dir = tmpRepo({ "murmur.toml": `meetings_base = "/p"\nsecrets_command = 'export HF_TOKEN=tok-from-cmd'\n\n[summary]\nmodel = "m"\n` });
-    try {
-      expect(loadConfig(dir).hfToken).toBe("tok-from-cmd");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  test("accepts an array of commands", () => {
-    const dir = tmpRepo({ "murmur.toml": `meetings_base = "/p"\nsecrets_command = ["export FOO=ignored", "export HF_TOKEN=arr-tok"]\n\n[summary]\nmodel = "m"\n` });
-    try {
-      expect(loadConfig(dir).hfToken).toBe("arr-tok");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
-  });
-
-  test("a benign failure (missing file in the command) doesn't abort startup", () => {
-    const dir = tmpRepo({ "murmur.toml": `meetings_base = "/p"\nsecrets_command = '[ -f /no/such/file ] && source /no/such/file'\n\n[summary]\nmodel = "m"\n` });
-    try {
-      // The command exits non-zero, but printf is the final statement so the load still succeeds.
-      expect(loadConfig(dir).meetingsBase).toBe("/p");
-    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
 

@@ -6,8 +6,8 @@
 # no $VAR) — write absolute paths elsewhere.
 #
 # Precedence (highest first): environment variable (e.g. set in the launchd plist) > this file >
-# built-in defaults. A secret exported by secrets_command (below) fills in underneath, so you can
-# keep e.g. HF_TOKEN out of this file.
+# built-in defaults. So any value here can be overridden by an env var — handy if you'd rather not
+# store a secret like HF_TOKEN in the file and prefer to export it into the daemon's environment.
 #
 # TOML note: bare top-level keys (below) must come BEFORE any [table] header — once a [table]
 # starts, every following key belongs to it.
@@ -15,14 +15,6 @@
 meetings_base = "~/Recordings/Meetings"
 # port = 7461                      # localhost control API port
 # process_timeout_seconds = 7200   # per-stage wall-clock backstop (kills a wedged ASR/ollama job)
-
-# A shell command run at startup to populate the environment — the home for a secret you'd rather
-# not store in this file. murmur runs it with `set -a` (so exports are captured) and keeps any
-# recognised var it sets (currently HF_TOKEN). It's arbitrary shell, so source a cache or call a
-# secrets manager. Use a '...' literal string so embedded "..." need no escaping; an array of
-# commands also works. Examples:
-#   secrets_command = '[ -f "$HOME/.zsh/env/.secrets-cache" ] && source "$HOME/.zsh/env/.secrets-cache"'
-#   secrets_command = 'export HF_TOKEN="$(op read op://Private/HuggingFace/token)"'
 
 [summary]
 model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.g. gemma4:26b-mlx)
@@ -40,7 +32,7 @@ model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.
 # Diarization (speaker labels) — OFF by default. Needs a HuggingFace token + accepting the
 # pyannote community-1 terms; the asr venv already has pyannote.audio.
 # diarize = false
-# hf_token = "hf_xxx"
+# hf_token = "hf_xxx"              # or leave unset and export HF_TOKEN in the daemon's env instead
 # num_speakers = 0                 # speaker-count hint; 0 = auto-detect
 
 [vault]

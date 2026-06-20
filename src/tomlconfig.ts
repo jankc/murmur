@@ -1,7 +1,7 @@
 // Single-file configuration. <repoDir>/murmur.toml is the source for both daemon settings (read by
-// config.ts) and import sources (read by sources.ts). Secrets are kept out of it via its
-// secrets_command (run by config.ts), so the file itself stays plain config. Parsed via Bun's
-// native TOML loader — no dependency.
+// config.ts) and import sources (read by sources.ts). It's gitignored, so secrets like the
+// HuggingFace token live in it directly (or come from an env override). Parsed via Bun's native
+// TOML loader — no dependency.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
