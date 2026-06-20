@@ -5,6 +5,7 @@ import { test, expect, describe } from "bun:test";
 import { parseStamp, stampFromDate, monthOf } from "./stamp.ts";
 import { truthy, parseNum } from "./util.ts";
 import { titleFromSummary, sanitizeTitle } from "./archive.ts";
+import { isRecordingFile, stripAudioExt } from "./paths.ts";
 import { wordCount } from "./engines/ollama.ts";
 
 describe("stamp", () => {
@@ -35,6 +36,26 @@ describe("stamp", () => {
   test("monthOf prefers the name, falls back to the date", () => {
     expect(monthOf("meeting-2026-06-18_16-21-05", new Date(2000, 0, 1))).toBe("2026-06");
     expect(monthOf("garbage", new Date(2026, 0, 5))).toBe("2026-01");
+  });
+});
+
+describe("audio extension helpers", () => {
+  test("isRecordingFile accepts canonical FLAC and legacy WAV, rejects others", () => {
+    expect(isRecordingFile("meeting-2026-06-18_16-21-05.flac")).toBe(true);
+    expect(isRecordingFile("meeting-2026-06-18_16-21-05.wav")).toBe(true);
+    expect(isRecordingFile("MEETING.FLAC")).toBe(true); // case-insensitive
+    expect(isRecordingFile("meeting.txt")).toBe(false);
+    expect(isRecordingFile("meeting.md")).toBe(false);
+    expect(isRecordingFile("meeting-2026-06-18_16-21-05.partial")).toBe(false);
+    expect(isRecordingFile("meeting-2026-06-18_16-21-05")).toBe(false); // bare basename
+  });
+
+  test("stripAudioExt removes a known audio extension and nothing else", () => {
+    expect(stripAudioExt("meeting-2026-06-18_16-21-05.flac")).toBe("meeting-2026-06-18_16-21-05");
+    expect(stripAudioExt("meeting-2026-06-18_16-21-05.wav")).toBe("meeting-2026-06-18_16-21-05");
+    expect(stripAudioExt("meeting-2026-06-18_16-21-05")).toBe("meeting-2026-06-18_16-21-05"); // no-op
+    expect(stripAudioExt("notes.m4a")).toBe("notes.m4a"); // not a known canonical/legacy ext
+    expect(stripAudioExt("a.b.flac")).toBe("a.b"); // only the trailing ext is stripped
   });
 });
 

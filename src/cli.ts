@@ -7,6 +7,7 @@ import { basename, dirname, join } from "node:path";
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { userInfo } from "node:os";
 import { loadConfig, type Config } from "./config.ts";
+import { isRecordingFile, stripAudioExt } from "./paths.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/asr.ts";
@@ -57,7 +58,7 @@ function positional(): string | undefined {
 
 function newestRecording(cfg: Config): string | null {
   // Newest pending in inbox/ if any (the usual "process what I just recorded"); else
-  // newest already-processed wav (inbox + processed are searched, recursively).
+  // newest already-processed recording (inbox + processed are searched, recursively).
   const dirs = [cfg.paths.inboxDir, cfg.paths.processedDir];
   let best: { path: string; mtime: number } | null = null;
   for (const dir of dirs) {
@@ -68,7 +69,7 @@ function newestRecording(cfg: Config): string | null {
       continue;
     }
     for (const e of entries) {
-      if (!e.endsWith(".wav")) continue;
+      if (!isRecordingFile(e)) continue;
       const p = `${dir}/${e}`;
       const mtime = statSync(p).mtimeMs;
       if (!best || mtime > best.mtime) best = { path: p, mtime };
@@ -79,7 +80,7 @@ function newestRecording(cfg: Config): string | null {
 }
 
 async function runInline(wavPath: string): Promise<{ txt: string; md: string }> {
-  const base = basename(wavPath, ".wav");
+  const base = stripAudioExt(basename(wavPath));
   const job: QueueItem = { basename: base, wavPath, enqueuedAt: 0, attempts: 0 };
   const signal = new AbortController().signal;
   // Process unconditionally, overwriting any prior outputs — same as the daemon worker.
@@ -366,7 +367,7 @@ switch (cmd) {
   case "retry-failed": {
     let names: string[];
     try {
-      names = readdirSync(cfg.paths.failedDir).filter((f) => f.endsWith(".wav"));
+      names = readdirSync(cfg.paths.failedDir).filter(isRecordingFile);
     } catch {
       names = [];
     }
@@ -378,8 +379,9 @@ switch (cmd) {
     const stillFailing: string[] = [];
     for (const n of names) {
       // Don't let one bad recording (inline path) abort the rest — catch, continue, report.
+      // Dispatch the actual file (n keeps its real extension — a legacy entry may be .wav).
       try {
-        await dispatchWav(cfg.paths.failedWav(basename(n, ".wav")));
+        await dispatchWav(join(cfg.paths.failedDir, n));
       } catch (e) {
         stillFailing.push(n);
         console.error(`  ✗ ${n}: ${String(e)}`);
@@ -393,7 +395,7 @@ switch (cmd) {
     const arg = positional() ?? newestRecording(cfg) ?? "";
     const wav = (await resolveWav(cfg, arg)) ?? (arg && (await Bun.file(arg).exists()) ? arg : null);
     if (!wav) die(`recording not found: ${arg || "(none)"}`);
-    const base = basename(wav, ".wav");
+    const base = stripAudioExt(basename(wav));
     const txt = cfg.paths.transcript(base);
     await transcribe(cfg, { basename: base, wavPath: wav, enqueuedAt: 0, attempts: 0 }, new AbortController().signal);
     console.log(txt);

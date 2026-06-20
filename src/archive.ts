@@ -7,12 +7,13 @@
 // caller's to log — a vault hiccup must not fail the local job.
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Config } from "./config.ts";
 import { generateTitle, EMPTY_MARKER } from "./engines/ollama.ts";
 import { isAbort } from "./engines/errors.ts";
 import { parseStamp, stampFromDate } from "./stamp.ts";
 import { locate } from "./recordings.ts";
+import { CANONICAL_AUDIO_EXT } from "./paths.ts";
 import { log } from "./log.ts";
 
 export async function archiveSummary(cfg: Config, base: string, signal: AbortSignal): Promise<void> {
@@ -49,14 +50,18 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
     }
   }
 
+  // Resolve the actual stored recording once — for the duration and the frontmatter source
+  // pointer (a new recording is .flac; a legacy/back-catalogue one may still be .wav).
+  const audioPath = await locate(cfg, base); // inbox during processing, processed/ afterwards
+  const sourceName = audioPath ? basename(audioPath) : `${base}${CANONICAL_AUDIO_EXT}`;
   const speakers = await countSpeakers(cfg, base);
-  const duration = await durationOf(cfg, base);
+  const duration = audioPath ? await durationOf(cfg, audioPath) : null;
   const fm = [
     "---",
     `title: ${yaml(title || prefix)}`,
     `date: ${when.date}`,
     `time: ${yaml(when.display)}`,
-    `source: ${yaml(`${base}.wav`)}`,
+    `source: ${yaml(sourceName)}`,
     ...(duration ? [`duration: ${yaml(duration)}`] : []),
     ...(speakers ? [`speakers: ${speakers}`] : []),
     "tags: [meeting, murmur]",
@@ -117,15 +122,33 @@ async function countSpeakers(cfg: Config, base: string): Promise<number> {
   return new Set((await t.text()).match(/SPEAKER_\d+/g) ?? []).size;
 }
 
-// Recordings are mono 16 kHz s16le PCM, so duration is exact from file size (44-byte header).
-async function durationOf(cfg: Config, base: string): Promise<string | null> {
-  const wav = await locate(cfg, base); // inbox during processing, processed/ afterwards
-  if (!wav) return null;
-  const f = Bun.file(wav);
-  const seconds = Math.max(0, (f.size - 44) / 32000);
-  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+/** Human duration (H:MM:SS / M:SS) of the stored recording, or null if unknown. FLAC is
+ *  compressed (size ≠ length), so probe it with ffprobe; a legacy raw-PCM .wav (mono 16 kHz
+ *  s16le, 44-byte header) is exact from file size with no subprocess. */
+async function durationOf(cfg: Config, audioPath: string): Promise<string | null> {
+  const seconds = audioPath.toLowerCase().endsWith(".wav")
+    ? Math.max(0, (Bun.file(audioPath).size - 44) / 32000)
+    : await probeDurationSeconds(cfg, audioPath);
+  if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) return null;
   const s = Math.round(seconds);
   const p = (n: number) => String(n).padStart(2, "0");
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`;
+}
+
+/** Container duration in seconds via ffprobe, or null on any failure (duration is then just
+ *  omitted from the note — a missing-ffprobe/odd-file case must never fail archiving). */
+async function probeDurationSeconds(cfg: Config, file: string): Promise<number | null> {
+  try {
+    const proc = Bun.spawn(
+      ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file],
+      { env: { ...process.env, PATH: cfg.childPath }, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+    );
+    const out = (await new Response(proc.stdout).text()).trim();
+    if ((await proc.exited) !== 0) return null;
+    const n = Number(out);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
 }

@@ -1,15 +1,21 @@
-// Recording: spawn capture process(es) for the configured backend, producing a mono
-// 16 kHz PCM WAV in recordings/.partial/ (NOT the watched inbox/) so an in-progress
-// recording never triggers the watcher. The finished .wav is moved into inbox/ by stop(),
-// or by finalizeOrphans() if the recording ended on its own (MAX cap) or the host crashed.
+// Recording: spawn capture process(es) for the configured backend, producing a raw PCM-ish
+// WAV in recordings/.partial/ (NOT the watched inbox/) so an in-progress recording never
+// triggers the watcher. At finalize the capture is transcoded to the canonical 16 kHz mono
+// FLAC and atomically dropped into inbox/ — by stop(), or by finalizeOrphans() if the
+// recording ended on its own (MAX cap) or the host crashed.
+//
+// Why capture WAV but archive FLAC: raw PCM is maximally salvageable if a capture is killed
+// mid-stream, whereas a FLAC truncated by SIGKILL can lose its STREAMINFO/last frame. So we
+// keep crash recovery on robust PCM and encode FLAC only once the capture is complete.
 //
 // Two backends (RECORD_BACKEND):
 //   ownscribe — one ownscribe-audio process captures system audio (ScreenCaptureKit) + the
 //               mic and, on stop, merges them host-time-aligned. No output routing, so the
 //               macOS volume keys keep working. Writes 24 kHz mono float; finalize transcodes
-//               it to the pipeline's 16 kHz mono s16le.
+//               it to the canonical 16 kHz mono FLAC.
 //   ffmpeg    — one ffmpeg captures an avfoundation device (e.g. a BlackHole Aggregate
-//               Device) through the pan filter, writing <base>.wav directly.
+//               Device) through the pan filter, writing <base>.wav (raw PCM); finalize
+//               transcodes it to FLAC.
 //
 // All recording state lives in state/recording.json so isRecording()/currentFile() work
 // regardless of who started it (CLI or daemon) and a recording can span >1 process. Capture
@@ -20,7 +26,7 @@ import type { Config } from "./config.ts";
 import { notify } from "./notify.ts";
 import { sleep } from "./util.ts";
 import { log } from "./log.ts";
-import { transcodeToWav16k } from "./transcode.ts";
+import { transcodeToFlac16k } from "./transcode.ts";
 
 export interface Recorder {
   isRecording(): boolean;
@@ -38,7 +44,8 @@ interface RecordingState {
   backend: "ffmpeg" | "ownscribe";
   base: string;
   startedAt: number;
-  outWav: string; // final mono 16 kHz wav in .partial/ (after transcode, for ownscribe)
+  // The raw capture in .partial/ is always parts[0].file (ffmpeg: <base>.wav PCM; ownscribe:
+  // <base>.oa.wav 24 kHz float). Finalize transcodes it to inbox/<base>.flac.
   parts: RecordingPart[];
 }
 
@@ -51,7 +58,7 @@ export class MeetingRecorder implements Recorder {
   }
 
   currentFile(): string | null {
-    return this.readState()?.outWav ?? null;
+    return this.readState()?.parts[0]?.file ?? null;
   }
 
   async start(): Promise<{ ok: boolean; message: string }> {
@@ -60,7 +67,6 @@ export class MeetingRecorder implements Recorder {
 
     const ts = stamp(new Date());
     const base = `meeting-${ts}`;
-    const outWav = join(this.cfg.paths.partialDir, `${base}.wav`);
     for (const d of [this.cfg.paths.partialDir, this.cfg.paths.inboxDir, this.cfg.paths.logsDir, this.cfg.paths.stateDir]) {
       mkdirSync(d, { recursive: true });
     }
@@ -68,35 +74,38 @@ export class MeetingRecorder implements Recorder {
     let state: RecordingState;
     try {
       state =
-        this.cfg.recordBackend === "ownscribe" ? this.startOwnscribe(base, outWav)
-        : this.startFfmpeg(base, outWav);
+        this.cfg.recordBackend === "ownscribe" ? this.startOwnscribe(base)
+        : this.startFfmpeg(base);
     } catch (err) {
       return { ok: false, message: `could not start recording: ${String(err)}` };
     }
     this.writeState(state);
+    const capture = state.parts[0]!.file;
     notify(this.cfg, "Meeting recording started");
-    log.info("recorder", `recording [${state.backend}] → ${outWav}`);
-    return { ok: true, message: `recording started (${outWav})` };
+    log.info("recorder", `recording [${state.backend}] → ${capture}`);
+    return { ok: true, message: `recording started (${capture})` };
   }
 
-  /** ffmpeg backend: one ffmpeg captures the avfoundation device through the pan filter. */
-  private startFfmpeg(base: string, outWav: string): RecordingState {
+  /** ffmpeg backend: one ffmpeg captures the avfoundation device through the pan filter,
+   *  writing raw PCM to .partial/<base>.wav (transcoded to FLAC at finalize). */
+  private startFfmpeg(base: string): RecordingState {
+    const capture = join(this.cfg.paths.partialDir, `${base}.wav`);
     const logFd = openSync(join(this.cfg.paths.logsDir, `${base}.log`), "a");
     const proc = Bun.spawn(
       ["ffmpeg", "-f", "avfoundation", "-i", `:${this.cfg.recordDeviceIndex}`, "-filter_complex", this.cfg.panFilter,
-        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-t", String(this.cfg.maxDurationSeconds), outWav],
+        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-t", String(this.cfg.maxDurationSeconds), capture],
       { cwd: this.cfg.meetingsBase, env: { ...process.env, PATH: this.cfg.childPath }, stdin: "ignore", stdout: logFd, stderr: logFd },
     );
     proc.unref();
     if (!proc.pid) throw new Error("ffmpeg failed to start");
-    return { backend: "ffmpeg", base, startedAt: Date.now(), outWav, parts: [{ pid: proc.pid, file: outWav }] };
+    return { backend: "ffmpeg", base, startedAt: Date.now(), parts: [{ pid: proc.pid, file: capture }] };
   }
 
   /** ownscribe backend: one ownscribe-audio process captures system (ScreenCaptureKit) + mic
    *  (AVFAudio) and, on stop, merges them host-time-aligned into one WAV. No output routing,
    *  so volume keys keep working. It writes a 24 kHz mono float WAV; finalize transcodes it to
-   *  the 16 kHz mono s16le the pipeline expects. */
-  private startOwnscribe(base: string, outWav: string): RecordingState {
+   *  the canonical 16 kHz mono FLAC. */
+  private startOwnscribe(base: string): RecordingState {
     if (!existsSync(this.cfg.ownscribeBin)) {
       throw new Error(`ownscribe-audio not found at ${this.cfg.ownscribeBin} — build it (see README → Recording backends)`);
     }
@@ -109,7 +118,7 @@ export class MeetingRecorder implements Recorder {
     );
     proc.unref();
     if (!proc.pid) throw new Error("ownscribe-audio failed to start");
-    return { backend: "ownscribe", base, startedAt: Date.now(), outWav, parts: [{ pid: proc.pid, file: raw }] };
+    return { backend: "ownscribe", base, startedAt: Date.now(), parts: [{ pid: proc.pid, file: raw }] };
   }
 
   async stop(): Promise<{ ok: boolean; message: string }> {
@@ -155,7 +164,7 @@ export class MeetingRecorder implements Recorder {
       if (st.parts.some((p) => alive(p.pid))) {
         if (Date.now() - st.startedAt > this.cfg.maxDurationSeconds * 1000) {
           log.info("recorder", `recording ${st.base} hit max duration — auto-stopping`);
-          return (await this.stop()).ok ? join(this.cfg.paths.inboxDir, `${st.base}.wav`) : null;
+          return (await this.stop()).ok ? this.cfg.paths.inboxWav(st.base) : null;
         }
         return null; // in progress
       }
@@ -164,68 +173,63 @@ export class MeetingRecorder implements Recorder {
       this.clearState();
       return moved;
     }
-    // No active recording: move any legacy stray <base>.wav left in .partial/ (defensive).
+    // No active recording: transcode any stray raw capture left in .partial/ (defensive).
     return this.moveStrayPartial();
   }
 
-  /** Produce st.outWav (transcoding ownscribe's merged track if needed), then move it to
-   *  inbox/. Returns the inbox path, or null if nothing usable was captured. */
+  /** Transcode the raw capture (parts[0]) → canonical 16 kHz mono FLAC and atomically move it
+   *  into inbox/. Returns the inbox path, or null if nothing usable was captured / encode fails. */
   private async finalizeState(st: RecordingState): Promise<string | null> {
-    if (st.backend === "ownscribe" && !(await this.transcodeOwnscribe(st))) {
-      const raw = st.parts[0]?.file;
-      // Transcode failed — never delete a non-empty merged capture, or the only copy of the
-      // meeting is lost on a transient ffmpeg hiccup. Only clean up when there's no audio.
-      if (raw && existsSync(raw) && statSync(raw).size > 0) {
-        log.error("recorder", `${st.base}: transcode failed — kept raw capture ${raw}; recover with: ffmpeg -i "${raw}" -ac 1 -ar 16000 -c:a pcm_s16le "<out>.wav"`);
-      } else {
-        this.cleanupTemps(st);
-      }
-      return null;
-    }
-    if (!existsSync(st.outWav) || statSync(st.outWav).size === 0) {
+    const capture = st.parts[0]?.file;
+    if (!capture || !existsSync(capture) || statSync(capture).size === 0) {
       log.warn("recorder", `${st.base}: no audio captured`);
       this.cleanupTemps(st);
       return null;
     }
-    const dest = join(this.cfg.paths.inboxDir, basename(st.outWav));
+    // Encode FLAC into a temp in .partial/ (not the watched inbox/), then atomic-rename — so the
+    // watcher never sees a half-written file. Encode runs only once the capture is complete.
+    const tmp = join(this.cfg.paths.partialDir, `${st.base}.flac`);
+    if (!(await transcodeToFlac16k(this.cfg, capture, tmp))) {
+      rmSync(tmp, { force: true });
+      // Keep the raw capture — never lose the only copy of the meeting on a transient ffmpeg
+      // hiccup. cleanupTemps is intentionally NOT called here.
+      log.error("recorder", `${st.base}: transcode failed — kept raw capture ${capture}; recover with: ffmpeg -i "${capture}" -ac 1 -ar 16000 -c:a flac "<out>.flac"`);
+      return null;
+    }
+    const dest = this.cfg.paths.inboxWav(st.base); // canonical .flac
     try {
       mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
-      renameSync(st.outWav, dest);
+      renameSync(tmp, dest);
       log.info("recorder", `finalized → inbox/${basename(dest)}`);
     } catch (err) {
-      if (existsSync(st.outWav)) log.warn("recorder", `could not finalize ${st.base}: ${String(err)}`);
+      rmSync(tmp, { force: true });
+      log.warn("recorder", `could not finalize ${st.base}: ${String(err)}`);
       return null;
     }
     this.cleanupTemps(st);
     return dest;
   }
 
-  /** Transcode ownscribe-audio's merged 24 kHz mono float WAV to the 16 kHz mono s16le the
-   *  pipeline expects (the merge already synced system + mic). */
-  private async transcodeOwnscribe(st: RecordingState): Promise<boolean> {
-    const raw = st.parts[0]?.file;
-    if (!raw) {
-      log.warn("recorder", `${st.base}: no capture file to transcode`);
-      return false;
-    }
-    return transcodeToWav16k(this.cfg, raw, st.outWav);
-  }
-
-  private moveStrayPartial(): string | null {
+  /** Recover a stray raw capture (meeting-<stamp>.wav, PCM) left in .partial/ by a crash:
+   *  transcode it to canonical FLAC in inbox/. Never touches the backend temp tracks
+   *  (.oa.wav, *.tmp.wav) — only a complete-looking PCM capture. */
+  private async moveStrayPartial(): Promise<string | null> {
     const dir = this.cfg.paths.partialDir;
     if (!existsSync(dir)) return null;
     let last: string | null = null;
     for (const name of readdirSync(dir)) {
-      // Only a complete final recording (meeting-<stamp>.wav) — never the backend's temp
-      // tracks (.oa.wav, *.tmp.wav).
       if (!/^meeting-\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.wav$/.test(name)) continue;
       const src = join(dir, name);
       try {
         if (statSync(src).size === 0) continue;
-        const dest = join(this.cfg.paths.inboxDir, name);
+        const base = basename(name, ".wav");
+        const tmp = join(dir, `${base}.flac`);
+        if (!(await transcodeToFlac16k(this.cfg, src, tmp))) { rmSync(tmp, { force: true }); continue; }
+        const dest = this.cfg.paths.inboxWav(base);
         mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
-        renameSync(src, dest);
-        log.info("recorder", `finalized stray recording → inbox/${name}`);
+        renameSync(tmp, dest);
+        rmSync(src, { force: true }); // raw PCM consumed
+        log.info("recorder", `finalized stray recording → inbox/${basename(dest)}`);
         last = dest;
       } catch (err) {
         if (existsSync(src)) log.warn("recorder", `could not finalize ${name}: ${String(err)}`);
@@ -236,7 +240,7 @@ export class MeetingRecorder implements Recorder {
 
   private cleanupTemps(st: RecordingState): void {
     for (const p of st.parts) {
-      if (p.file === st.outWav) continue; // ffmpeg backend wrote straight to outWav (already moved)
+      // The raw capture has been transcoded into inbox/ (or there was no audio) — drop it.
       try { if (existsSync(p.file)) unlinkSync(p.file); } catch {}
       // ownscribe-audio's own temp tracks, in case it died before cleaning them up itself.
       if (st.backend === "ownscribe") {

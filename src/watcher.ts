@@ -1,11 +1,12 @@
-// Watches recordings/ for new .wav files. macOS fs.watch (FSEvents) is coarse and
-// can coalesce/miss events, so we (a) debounce + wait for the file size to stabilize
-// (ffmpeg done writing — mirrors the old watch-recordings.sh 2s-stable logic), and
-// (b) do a reconcile scan on boot to catch files created while the daemon was down.
+// Watches recordings/inbox/ for new recordings (canonical FLAC, or a legacy WAV). macOS
+// fs.watch (FSEvents) is coarse and can coalesce/miss events, so we (a) debounce + wait for the
+// file size to stabilize (producer done writing — mirrors the old watch-recordings.sh 2s-stable
+// logic), and (b) do a reconcile scan on boot to catch files created while the daemon was down.
 import { watch } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
+import { isRecordingFile } from "./paths.ts";
 import { sleep } from "./util.ts";
 import { log } from "./log.ts";
 
@@ -18,7 +19,7 @@ export function startWatcher(cfg: Config, onStable: (wav: string) => void): Watc
 
   const pending = new Map<string, ReturnType<typeof setTimeout>>();
   const watcher = watch(cfg.paths.inboxDir, { persistent: true }, (_event, fname) => {
-    if (!fname || !fname.toString().endsWith(".wav")) return;
+    if (!fname || !isRecordingFile(fname.toString())) return;
     const full = join(cfg.paths.inboxDir, fname.toString());
     const existing = pending.get(full);
     if (existing) clearTimeout(existing);
@@ -58,9 +59,9 @@ async function debounceStable(
 async function reconcile(cfg: Config, onStable: (wav: string) => void): Promise<void> {
   try {
     const entries = await readdir(cfg.paths.inboxDir);
-    const wavs = entries.filter((e) => e.endsWith(".wav"));
-    if (wavs.length) log.info("watcher", `reconcile: ${wavs.length} recording(s) in inbox`);
-    for (const e of wavs) onStable(join(cfg.paths.inboxDir, e));
+    const recordings = entries.filter(isRecordingFile);
+    if (recordings.length) log.info("watcher", `reconcile: ${recordings.length} recording(s) in inbox`);
+    for (const e of recordings) onStable(join(cfg.paths.inboxDir, e));
   } catch (err) {
     log.warn("watcher", `reconcile scan failed: ${String(err)}`);
   }

@@ -3,6 +3,7 @@
 // pipeline stages succeed — a crash mid-job leaves it at the head for replay.
 import { basename as pathBasename } from "node:path";
 import type { Config } from "./config.ts";
+import { stripAudioExt } from "./paths.ts";
 import { readJson, writeJsonAtomic } from "./state.ts";
 import { log } from "./log.ts";
 
@@ -61,7 +62,7 @@ export class Queue {
    * null if it was a duplicate.
    */
   async enqueue(wavPath: string): Promise<QueueItem | null> {
-    const base = pathBasename(wavPath, ".wav");
+    const base = stripAudioExt(pathBasename(wavPath));
     if (this.items.some((i) => i.basename === base) || this.enqueuing.has(base)) return null;
     this.enqueuing.add(base);
     try {

@@ -8,22 +8,28 @@ import { statSync } from "node:fs";
 import { mkdir, rename } from "node:fs/promises";
 import { basename as pathBasename, dirname, isAbsolute, join } from "node:path";
 import type { Config } from "./config.ts";
+import { KNOWN_AUDIO_EXTS, stripAudioExt } from "./paths.ts";
 import { monthOf } from "./stamp.ts";
 import { log } from "./log.ts";
 
 /** Locate a recording by bare basename, wherever it currently sits in its lifecycle
- *  (inbox → failed → processed/<month>). Returns the existing path or null. */
+ *  (inbox → failed → processed/<month>). Checks the canonical .flac first, then a legacy .wav
+ *  at each location, so the existing back catalogue keeps resolving. Returns the path or null. */
 export async function locate(cfg: Config, base: string): Promise<string | null> {
-  const inbox = cfg.paths.inboxWav(base);
-  if (await Bun.file(inbox).exists()) return inbox;
-  const failed = cfg.paths.failedWav(base);
-  if (await Bun.file(failed).exists()) return failed;
-  // processed/ is partitioned by month — glob for the basename. The dir may not exist yet
-  // (e.g. a fresh base, or `murmur import` before the daemon's first run) — that's "not there".
+  for (const dir of [cfg.paths.inboxDir, cfg.paths.failedDir]) {
+    for (const ext of KNOWN_AUDIO_EXTS) {
+      const p = join(dir, `${base}${ext}`);
+      if (await Bun.file(p).exists()) return p;
+    }
+  }
+  // processed/ is partitioned by month — glob for the basename (either extension). The dir may
+  // not exist yet (a fresh base, or `murmur import` before the daemon's first run) — "not there".
   try {
-    const glob = new Bun.Glob(`**/${base}.wav`);
-    for await (const rel of glob.scan({ cwd: cfg.paths.processedDir })) {
-      return join(cfg.paths.processedDir, rel);
+    for (const ext of KNOWN_AUDIO_EXTS) {
+      const glob = new Bun.Glob(`**/${base}${ext}`);
+      for await (const rel of glob.scan({ cwd: cfg.paths.processedDir })) {
+        return join(cfg.paths.processedDir, rel);
+      }
     }
   } catch {
     /* processed/ absent → not found */
@@ -32,12 +38,12 @@ export async function locate(cfg: Config, base: string): Promise<string | null> 
 }
 
 /** Resolve an /enqueue or CLI argument (absolute path, cwd-relative path, or bare
- *  basename) to an existing .wav path. Returns the path or null if not found. */
+ *  basename) to an existing recording path. Returns the path or null if not found. */
 export async function resolveWav(cfg: Config, input: string): Promise<string | null> {
   if (isAbsolute(input)) return (await Bun.file(input).exists()) ? input : null;
   const cwd = join(process.cwd(), input);
   if (await Bun.file(cwd).exists()) return cwd;
-  return locate(cfg, pathBasename(input, ".wav"));
+  return locate(cfg, stripAudioExt(pathBasename(input)));
 }
 
 /** Move a recording to its terminal lifecycle folder (location = state). Best-effort:
@@ -46,10 +52,13 @@ export async function resolveWav(cfg: Config, input: string): Promise<string | n
 export async function move(cfg: Config, base: string, to: "processed" | "failed"): Promise<string | null> {
   const src = await locate(cfg, base);
   if (!src) return null; // already moved, or recorded elsewhere
+  // Relocate the file as-is, keeping its actual extension (.flac, or a legacy .wav) — so we
+  // never rename WAV bytes into a .flac name (a reprocessed/back-catalogue recording stays valid).
+  const name = pathBasename(src);
   const dest =
     to === "processed"
-      ? cfg.paths.processedWav(base, monthOf(base, statSync(src).mtime))
-      : cfg.paths.failedWav(base);
+      ? join(cfg.paths.processedDir, monthOf(base, statSync(src).mtime), name)
+      : join(cfg.paths.failedDir, name);
   if (src === dest) return dest; // already in its terminal home
   try {
     await mkdir(dirname(dest), { recursive: true });

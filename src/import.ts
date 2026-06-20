@@ -1,6 +1,6 @@
 // `murmur import` engine: a pure producer that feeds external recordings into the pipeline.
 // For each configured source it diffs the on-disk files against a ledger, materialises +
-// transcodes only the new ones, and atomically drops meeting-<stamp>.wav into inbox/. From
+// transcodes only the new ones, and atomically drops meeting-<stamp>.flac into inbox/. From
 // there the existing watcher/queue/worker take over unchanged. It touches only inbox/, its
 // scratch dir, and the ledger — never the queue, worker, daemon, or failed/.
 //
@@ -14,7 +14,8 @@ import type { Config } from "./config.ts";
 import { readJson, writeJsonAtomic } from "./state.ts";
 import { loadSources, enumerate } from "./sources.ts";
 import { ensureLocal } from "./materialize.ts";
-import { transcodeToWav16k } from "./transcode.ts";
+import { transcodeToFlac16k } from "./transcode.ts";
+import { CANONICAL_AUDIO_EXT } from "./paths.ts";
 import { locate } from "./recordings.ts";
 import { log } from "./log.ts";
 
@@ -84,8 +85,8 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
         continue;
       }
 
-      const tmp = join(cfg.paths.importTmpDir, `${c.basename}.wav`);
-      if (!(await transcodeToWav16k(cfg, c.srcPath, tmp))) {
+      const tmp = join(cfg.paths.importTmpDir, `${c.basename}${CANONICAL_AUDIO_EXT}`);
+      if (!(await transcodeToFlac16k(cfg, c.srcPath, tmp))) {
         rmSync(tmp, { force: true });
         failed++;
         continue;
@@ -102,7 +103,7 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
       }
       ledger.items[c.id] = { size: c.size, basename: c.basename, importedAt: Date.now() };
       imported++;
-      log.info("import", `imported ${c.id} → inbox/${c.basename}.wav`);
+      log.info("import", `imported ${c.id} → inbox/${c.basename}${CANONICAL_AUDIO_EXT}`);
     }
 
     summaries.push({ name: src.name, scanned: candidates.length, imported, failed });

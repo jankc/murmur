@@ -5,12 +5,12 @@ Local meeting recorder, transcriber, and summarizer for macOS. Captures system a
 One stack: a single [Bun](https://bun.sh)/TypeScript codebase in `src/` provides both the **`murmur` CLI** (manual control) and a long-lived **daemon** (automatic, GPU-pause-aware processing). They share the same modules, so every step has one implementation.
 
 ```
-record (system + mic) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ asr (mlx-whisper + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
+record (system + mic) ─▶ .partial/ ─(complete, →FLAC)─▶ inbox/*.flac ─▶ asr (mlx-whisper + diarize) ─▶ ollama ─▶ summaries/*.md ─▶ Obsidian
    └ daemon: watches inbox · serial queue · GPU-pause · auto-defers while a recording is live
-     on success the wav moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
+     on success the recording moves ─▶ recordings/processed/<YYYY-MM>/   (failure ─▶ recordings/failed/)
 ```
 
-**A recording's folder is its state.** An in-progress recording stays in `recordings/.partial/` (not watched), so it never triggers the pipeline or clutters the inbox. When recording ends the finished `.wav` is moved into `recordings/inbox/` — the only folder the daemon watches. Once fully processed (transcribed → summarized → archived) it's **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves it to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur reprocess` re-run command to `logs/process-failures.log`.
+**A recording's folder is its state.** An in-progress recording stays in `recordings/.partial/` (not watched, raw PCM WAV — maximally crash-salvageable), so it never triggers the pipeline or clutters the inbox. When recording ends the capture is transcoded to canonical **FLAC** (lossless, ~half the size of WAV) and atomically moved into `recordings/inbox/` — the only folder the daemon watches. Once fully processed (transcribed → summarized → archived) it's **moved** to `recordings/processed/<YYYY-MM>/`, so it's never re-examined — no growing "already done?" rescans. A non-retryable failure moves it to `recordings/failed/` (so a poison file doesn't retry every restart) and logs a `murmur reprocess` re-run command to `logs/process-failures.log`.
 
 ## Install
 
@@ -77,11 +77,11 @@ murmur logs [-f]             # tail the daemon logs (-f to follow)
 murmur daemon <sub>          # run | start | stop | restart | install — manage the LaunchAgent
 ```
 
-Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. A recording's **location is its state** — processing always runs and overwrites prior outputs, so **to reprocess a recording run `murmur reprocess <name>`** (it resolves the wav wherever it sits — `inbox/`, `failed/`, or `processed/`); `murmur retry-failed` re-runs everything in `recordings/failed/`.
+Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. A recording's **location is its state** — processing always runs and overwrites prior outputs, so **to reprocess a recording run `murmur reprocess <name>`** (it resolves the recording wherever it sits — `inbox/`, `failed/`, or `processed/`); `murmur retry-failed` re-runs everything in `recordings/failed/`.
 
 ## The daemon (automatic processing)
 
-The daemon watches `recordings/inbox/` and runs each new `.wav` through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand. Done recordings move to `processed/<YYYY-MM>/` (see [folder = state](#murmur) above).
+The daemon watches `recordings/inbox/` and runs each new recording (FLAC, or a legacy WAV) through the pipeline automatically — once the file stops growing, and **deferring while a recording is in progress** (keeps the GPU free during live meetings). It holds a **persistent queue** (one GPU job at a time, survives restarts) and supports **soft/hard pause** to free the GPU on demand. Done recordings move to `processed/<YYYY-MM>/` (see [folder = state](#murmur) above).
 
 Run it always-on via the LaunchAgent:
 ```sh
@@ -154,7 +154,7 @@ The originals in `$MEETINGS_BASE/summaries` stay the source of truth — the vau
 title: "Workflow nahrávání meetingů"
 date: 2026-06-18
 time: "16:21"
-source: "meeting-2026-06-18_16-21-05.wav"
+source: "meeting-2026-06-18_16-21-05.flac"
 duration: "1:13:25"
 speakers: 2            # only when diarized
 tags: [meeting, murmur]
@@ -165,10 +165,10 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 
 ## Notes
 
-- Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Audio is mono 16 kHz PCM.
+- Recording is hard-capped at `MAX_DURATION_SECONDS` (default 2h). Capture is mono 16 kHz PCM; recordings are archived as mono 16 kHz **FLAC** (lossless, ~half the size).
 - **ffmpeg backend:** recording downmixes the 3-channel Aggregate Device to mono with a `pan=` filter (default in `src/config.ts`): `c0+c1` = BlackHole 2ch (system audio — the other participants), `c2` = the microphone (your voice). If your Aggregate Device orders its sub-devices differently, set `RECORD_PAN_FILTER` in `config.sh` — a wrong channel map is the usual reason a capture comes out mute or lopsided.
 - On `stop`, murmur measures the finished recording's level and warns (notification + log) if it's effectively silent. Usual causes: a routing slip (e.g. system output not on the BlackHole multi-output on the `ffmpeg` backend) or a muted/grabbed mic. Threshold: `RECORD_SILENCE_DB` (default `-80` dBFS).
-- The `asr/asr.py` helper reads the wav read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
+- The `asr/asr.py` helper reads the recording read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
 - Each pipeline stage streams to its own log under `logs/`: recording → `meeting-<ts>.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses), and an ollama failure → `summary-<base>.log` (the failing response body). The daemon's own stdout/stderr go to `daemon.{out,err}.log` (`murmur logs`).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.

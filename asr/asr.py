@@ -2,7 +2,7 @@
 """Transcription + optional diarization helper for murmur, in one pyannote.audio 4 venv.
 
 Run with the asr venv's Python (see README → Install):
-    ~/.local/share/murmur/asr-venv/bin/python asr.py <audio.wav> \
+    ~/.local/share/murmur/asr-venv/bin/python asr.py <audio> \
         [--model <hf-repo>] [--language auto|cs|en|…] [--diarize [--num-speakers N]]
 
 Transcribes with mlx-whisper; when --diarize is given, also runs pyannote community-1
