@@ -18,8 +18,9 @@ record (system + mic) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ as
 brew install ffmpeg ollama uv terminal-notifier    # terminal-notifier optional (notifications)
 # Bun — via mise, or: curl -fsSL https://bun.sh/install | bash
 # uv  — via mise/brew (above), or: curl -fsSL https://astral.sh/uv/install.sh | sh   (drives the ASR venv)
-ollama pull gemma4:26b-mlx                          # or whatever you set as MODEL_SUMMARY
+ollama pull gemma3:12b                              # any Ollama chat model; set it as MODEL_SUMMARY
 ```
+> The `*-mlx` tags in `config.sh.example` (e.g. `gemma4:26b-mlx`) are **custom local MLX builds**, not on the Ollama registry — create them with `ollama create`, or just use any standard pullable model.
 `ffmpeg`, `ollama` + a pulled model, `bun`, and `uv` are required; `terminal-notifier` is optional. Building the `ownscribe` recording helper (below) also needs the **Xcode Command Line Tools** (`xcode-select --install`).
 
 The ASR engine (transcription + optional diarization) runs in one Python venv with both
@@ -47,7 +48,7 @@ Set up audio capture (see [Recording backends](#recording-backends) for the trad
 `config.sh` (gitignored; see `config.sh.example`) is sourced for configuration. Only the first two are required:
 ```sh
 export MEETINGS_BASE="$HOME/Recordings/Meetings"
-export MODEL_SUMMARY="gemma4:26b-mlx"
+export MODEL_SUMMARY="gemma3:12b"   # any Ollama chat model (the *-mlx tags are custom local builds)
 export RECORD_BACKEND=ownscribe     # recommended (see Recording backends); omit for the ffmpeg default
 # export RECORD_DEVICE_INDEX=1      # ffmpeg backend only: avfoundation index of your Aggregate Device
 export DIARIZE=1                    # speaker labels (see Diarization below)
@@ -62,15 +63,17 @@ Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-
 murmur record [--device N]   # start recording (system audio + your mic; --device sets the ffmpeg Aggregate Device index)
 murmur stop                  # stop recording
 murmur process [audio]       # transcribe + summarize (newest, or by path/basename)
+murmur reprocess <name>      # re-run the pipeline for one recording (incl. one in recordings/failed/)
+murmur retry-failed          # re-enqueue everything in recordings/failed/
 murmur transcribe [audio]    # transcribe only → prints transcript path
 murmur summarize <name>      # summarize a transcript → prints summary path
-murmur status                # recording / pause / queue state (JSON)
+murmur status [--json]       # recording / pause / queue / failures (human; --json for tools)
 murmur pause [hard]          # pause processing (soft = finish current; hard = abort + requeue)
 murmur resume
-murmur daemon                # run the orchestrator daemon in the foreground
+murmur daemon <sub>          # run | start | stop | restart | install — manage the LaunchAgent
 ```
 
-Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. A recording's **location is its state** — processing always runs and overwrites prior outputs, so **to reprocess a recording just move its `.wav` from `recordings/processed/<YYYY-MM>/` back into `recordings/inbox/`** (no need to delete the transcript/summary first).
+Outputs land in `$MEETINGS_BASE/{transcripts,summaries}/`. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. A recording's **location is its state** — processing always runs and overwrites prior outputs, so **to reprocess a recording run `murmur reprocess <name>`** (it resolves the wav wherever it sits — `inbox/`, `failed/`, or `processed/`); `murmur retry-failed` re-runs everything in `recordings/failed/`.
 
 ## The daemon (automatic processing)
 
@@ -78,12 +81,12 @@ The daemon watches `recordings/inbox/` and runs each new `.wav` through the pipe
 
 Run it always-on via the LaunchAgent:
 ```sh
-cp launchd/com.jank.murmur.daemon.plist ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jank.murmur.daemon.plist
-launchctl kickstart -k gui/$(id -u)/com.jank.murmur.daemon
-tail -f ~/Recordings/Meetings/logs/daemon.{out,err}.log
+murmur daemon install        # copy the plist into ~/Library/LaunchAgents/ and start it
+murmur daemon restart        # after editing config.sh or the plist (bootout + bootstrap)
+murmur daemon stop           # ( / start )
+tail -f "$MEETINGS_BASE/logs/daemon.out.log"   # (and daemon.err.log)
 ```
-After editing the plist, `bootout` then `bootstrap` again (`kickstart` alone won't re-read it). The plist hard-codes machine-specific absolute paths — the `bun` binary (a mise install), the repo's `src/main.ts`, the `WorkingDirectory`, the `StandardOut/ErrorPath` logs, and a `PATH` that resolves `bun`/`ffmpeg`/`ollama`/`terminal-notifier` — so **on a new machine (or a different username/repo location) rewrite all of these**, and update the `bun` path whenever you reinstall bun.
+`murmur daemon restart` re-reads an edited plist (`kickstart` alone wouldn't). The daemon's log location is derived from `MEETINGS_BASE` by `launchd/run-daemon.sh`, so relocating the base needs only a `config.sh` edit + `murmur daemon restart`. The plist still hard-codes machine-specific paths — the `bun` mise install in `PATH`, the repo's `run-daemon.sh`, and the `WorkingDirectory` — so **on a new machine (or a different username/repo location) edit those**, and update the `bun` path whenever you reinstall bun.
 
 ### Control API (`http://127.0.0.1:7461`)
 

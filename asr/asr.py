@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Transcription + optional diarization helper for murmur, in one pyannote.audio 4 venv.
 
-Run with the asr venv's Python (see README → ASR engine):
+Run with the asr venv's Python (see README → Install):
     ~/.local/share/murmur/asr-venv/bin/python asr.py <audio.wav> \
         [--model <hf-repo>] [--language auto|cs|en|…] [--diarize [--num-speakers N]]
 

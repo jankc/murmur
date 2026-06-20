@@ -58,7 +58,7 @@ export async function transcribe(cfg: Config, job: QueueItem, signal: AbortSigna
 async function runAsr(cfg: Config, label: string, wav: string, signal: AbortSignal, diarize: boolean): Promise<AsrOutput> {
   const script = join(cfg.repoDir, "asr", "asr.py");
   if (!existsSync(cfg.pythonBin)) {
-    throw new EngineError(`asr venv python not found at ${cfg.pythonBin} (see README → ASR engine)`, 1);
+    throw new EngineError(`asr venv python not found at ${cfg.pythonBin} (see README → Install)`, 1);
   }
   const args = [script, wav, "--model", cfg.asrModel];
   // Only force a language when explicitly configured; "auto" (default) lets whisper detect

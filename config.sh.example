@@ -3,7 +3,9 @@
 # required; everything else has sane defaults baked into src/config.ts.
 
 export MEETINGS_BASE="$HOME/Recordings/Meetings"
-export MODEL_SUMMARY="gemma4:26b-mlx"
+export MODEL_SUMMARY="gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.g.
+                                                # gemma4:26b-mlx) are custom LOCAL MLX builds, not
+                                                # pullable — create them with `ollama create`.
 
 # --- Daemon / ASR (optional) ---
 # export MURMUR_PORT=7461                      # localhost control API port
@@ -12,6 +14,12 @@ export MODEL_SUMMARY="gemma4:26b-mlx"
 #                                              # Forcing a language drops speech in OTHER languages —
 #                                              # leave on auto for bilingual (e.g. cs+en) meetings.
 # export MURMUR_PYTHON="$HOME/.local/share/murmur/asr-venv/bin/python"   # asr venv python (default)
+
+# --- Summarization (optional) ---
+# export OLLAMA_HOST="http://localhost:11434"  # ollama server (set if remote or non-default port)
+# export PROMPT_FILE="$PWD/prompts/summary.md" # summary prompt (default: repo prompts/summary.md,
+#                                              # which instructs Czech output — point elsewhere to
+#                                              # change the summary language/style)
 
 # --- Diarization (speaker labels, optional, OFF by default) ---
 # Requires a HuggingFace token + accepting the community-1 model terms. The ASR venv
@@ -47,6 +55,6 @@ export MODEL_SUMMARY="gemma4:26b-mlx"
 # Override if your Aggregate Device orders its sub-devices differently (a wrong map = mute capture).
 # export RECORD_PAN_FILTER="pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter"
 
-# --- Auto-record (v2, not yet implemented) ---
+# --- Auto-record (planned; NOT wired up yet — these have NO effect today) ---
 # export AUTORECORD=0
 # export MEETING_APPS="zoom.us,Microsoft Teams,Google Chrome"

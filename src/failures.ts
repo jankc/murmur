@@ -15,8 +15,8 @@ export async function logFailure(
   _wavPath: string,
 ): Promise<void> {
   const ts = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
-  const rerun = `murmur process "${basename}"  (wav in recordings/failed/)`;
-  const lineText = `[${ts}] ${basename} — ${stage} failed (exit ${code}). Re-run: ${rerun}\n`;
+  // A copy-pasteable re-run command (no trailing prose); the wav sits in recordings/failed/.
+  const lineText = `[${ts}] ${basename} — ${stage} failed (exit ${code}). Re-run: murmur reprocess "${basename}"\n`;
   try {
     await mkdir(dirname(cfg.paths.failureLog), { recursive: true });
     await appendFile(cfg.paths.failureLog, lineText);

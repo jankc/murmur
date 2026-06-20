@@ -16,7 +16,7 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
     return `${label} | bash=${bun} ${params} terminal=false refresh=true`;
   };
 
-  const title = recording ? "🔴" : paused ? "⏸" : "⚪";
+  const title = recording ? "🔴" : paused ? "⏸" : s.failedCount > 0 ? "⚠️" : "⚪";
   const lines: string[] = [depth > 0 ? `${title} ${depth}` : title, "---"];
 
   if (recording) {
@@ -27,6 +27,10 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
   }
 
   lines.push(s.current ? `Processing: ${s.current.basename} (${s.current.stage})` : `Queue: ${depth}`);
+  if (s.failedCount > 0) {
+    lines.push(`⚠️ ${s.failedCount} failed | color=red`);
+    lines.push(action("Retry failed", "retry-failed"));
+  }
   if (paused) {
     lines.push(`Processing paused (${s.pause}) | color=orange`);
     lines.push(action("Resume processing", "resume"));

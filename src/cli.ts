@@ -3,8 +3,9 @@
 // there's a single implementation of every step. Stateful actions (record/process/
 // pause/status) talk to the daemon when it's running, and fall back to doing the work
 // directly when it isn't; one-shot transcribe/summarize always run inline.
-import { basename } from "node:path";
-import { readdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { readdirSync, statSync, existsSync, copyFileSync, mkdirSync } from "node:fs";
+import { userInfo } from "node:os";
 import { loadConfig, type Config } from "./config.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
@@ -14,7 +15,8 @@ import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
 import { resolveWav, move } from "./recordings.ts";
 import { PauseStore } from "./jobstate.ts";
-import { offlineSnapshot } from "./status.ts";
+import { sleep } from "./util.ts";
+import { offlineSnapshot, renderStatus, type StatusSnapshot } from "./status.ts";
 import { renderSwiftBar } from "./swiftbar.ts";
 
 const cfg = loadConfig();
@@ -83,9 +85,89 @@ function die(msg: string): never {
   process.exit(1);
 }
 
+const DAEMON_LABEL = "com.jank.murmur.daemon";
+
+/** Enqueue a resolved wav via the daemon, or process it inline when the daemon is down. */
+async function dispatchWav(wav: string): Promise<void> {
+  if (await daemonUp()) {
+    const res = await daemonPost("/enqueue", { wav });
+    console.log(`enqueued via daemon: ${await res.text()}`);
+  } else {
+    console.error(`daemon offline — processing inline: ${basename(wav)}`);
+    const { txt, md } = await runInline(wav);
+    console.log(`transcript: ${txt}`);
+    console.log(`summary:    ${md}`);
+  }
+}
+
+async function launchctl(...args: string[]): Promise<{ ok: boolean; out: string }> {
+  const p = Bun.spawn(["launchctl", ...args], { stdout: "pipe", stderr: "pipe" });
+  const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+  return { ok: (await p.exited) === 0, out: (out + err).trim() };
+}
+
+/** Manage the launchd daemon so config/plist changes don't need raw launchctl. `restart`
+ *  re-reads an edited plist (bootout + bootstrap — `kickstart` alone would not); `install`
+ *  copies the repo plist into ~/Library/LaunchAgents first. */
+async function daemonctl(cfg: Config, action: "start" | "stop" | "restart" | "install"): Promise<void> {
+  const domain = `gui/${userInfo().uid}`;
+  const target = `${domain}/${DAEMON_LABEL}`;
+  const installed = join(userInfo().homedir, "Library/LaunchAgents", `${DAEMON_LABEL}.plist`);
+  const bootstrap = () => launchctl("bootstrap", domain, installed);
+
+  if (action === "install") {
+    const repoPlist = join(cfg.repoDir, "launchd", `${DAEMON_LABEL}.plist`);
+    if (!existsSync(repoPlist)) die(`plist not found: ${repoPlist}`);
+    mkdirSync(dirname(installed), { recursive: true });
+    copyFileSync(repoPlist, installed);
+    console.log(`installed → ${installed}`);
+  } else if (!existsSync(installed)) {
+    die(`daemon not installed (${installed} missing) — run: murmur daemon install`);
+  }
+
+  if (action === "stop") {
+    const r = await launchctl("bootout", target);
+    console.log(r.ok ? "daemon stopped" : `not running (${r.out || "no such service"})`);
+    return;
+  }
+  if (action === "start") {
+    const r = await bootstrap();
+    if (!r.ok) die(`start failed: ${r.out || "already running?"}`);
+    console.log("daemon started");
+    return;
+  }
+  // restart / install → bootstrap, after booting out any loaded instance.
+  await launchctl("bootout", target); // ignore "not loaded"
+  await sleep(300);
+  const r = await bootstrap();
+  if (!r.ok) die(`bootstrap failed: ${r.out}`);
+  console.log(action === "install" ? "daemon installed and started" : "daemon restarted");
+}
+
+const USAGE = `murmur — local meeting recorder / transcriber / summarizer
+
+Usage: murmur <command> [args]
+
+  record [--device N]      start recording (system audio + your mic)
+  stop                     stop the current recording
+  process [audio]          transcribe + summarize (newest, or by path/basename)
+  reprocess <name>         re-run the pipeline for one recording (incl. from failed/)
+  retry-failed             re-enqueue every recording in recordings/failed/
+  transcribe [audio]       transcribe only → prints transcript path
+  summarize <transcript>   summarize a transcript → prints summary path
+  status [--json]          recording / pause / queue / failures (human; --json for tools)
+  pause [hard]             pause processing (soft = finish current; hard = abort + requeue)
+  resume                   resume processing
+  daemon <sub>             run | start | stop | restart | install (manage the LaunchAgent)
+
+Stateful commands use the daemon if it's running, else act directly.`;
+
 switch (cmd) {
   case "daemon": {
-    await runDaemon(cfg);
+    const sub = rest[0];
+    if (sub === undefined || sub === "run") await runDaemon(cfg);
+    else if (sub === "start" || sub === "stop" || sub === "restart" || sub === "install") await daemonctl(cfg, sub);
+    else die(`unknown: murmur daemon ${sub} (run|start|stop|restart|install)`);
     break;
   }
 
@@ -101,31 +183,44 @@ switch (cmd) {
   case "stop": {
     const r = await new MeetingRecorder(cfg).stop();
     console.log(r.message);
+    if (!r.ok) process.exit(1);
     break;
   }
 
   case "status": {
-    if (await daemonUp()) {
-      console.log(await (await daemonGet("/status")).text());
-    } else {
-      // Daemon down — assemble the same snapshot from on-disk state.
-      console.log(JSON.stringify({ daemon: "offline", ...(await offlineSnapshot(cfg)) }, null, 2));
-    }
+    const up = await daemonUp();
+    const base = up
+      ? ((await (await daemonGet("/status")).json()) as StatusSnapshot)
+      : await offlineSnapshot(cfg);
+    const snap = { daemon: up ? "running" : "offline", ...base };
+    if (rest.includes("--json")) console.log(JSON.stringify(snap, null, 2));
+    else console.log(renderStatus(snap));
     break;
   }
 
   case "pause": {
     const mode = positional() === "hard" ? "hard" : "soft";
-    if (await daemonUp()) await daemonPost("/pause", { mode });
-    else await (await PauseStore.load(cfg)).set(mode);
-    console.log(`paused (${mode})`);
+    if (await daemonUp()) {
+      const res = await daemonPost("/pause", { mode }).catch((e) => die(`pause failed: ${String(e)}`));
+      if (!res.ok) die(`pause failed: HTTP ${res.status}`);
+      const body = (await res.json()) as { pause?: string };
+      console.log(`paused (${body.pause ?? mode}) [daemon]`);
+    } else {
+      await (await PauseStore.load(cfg)).set(mode);
+      console.log(`paused (${mode}) [offline — state written, no daemon to honor it]`);
+    }
     break;
   }
 
   case "resume": {
-    if (await daemonUp()) await daemonPost("/resume");
-    else await (await PauseStore.load(cfg)).set("none");
-    console.log("resumed");
+    if (await daemonUp()) {
+      const res = await daemonPost("/resume").catch((e) => die(`resume failed: ${String(e)}`));
+      if (!res.ok) die(`resume failed: HTTP ${res.status}`);
+      console.log("resumed [daemon]");
+    } else {
+      await (await PauseStore.load(cfg)).set("none");
+      console.log("resumed [offline — state written]");
+    }
     break;
   }
 
@@ -139,15 +234,32 @@ switch (cmd) {
     const arg = positional();
     const wav = arg ? await resolveWav(cfg, arg) : newestRecording(cfg);
     if (!wav) die(`no recording found${arg ? `: ${arg}` : ""}`);
-    if (await daemonUp()) {
-      const res = await daemonPost("/enqueue", { wav });
-      console.log(`enqueued via daemon: ${await res.text()}`);
-    } else {
-      console.error(`daemon offline — processing inline: ${basename(wav)}`);
-      const { txt, md } = await runInline(wav);
-      console.log(`transcript: ${txt}`);
-      console.log(`summary:    ${md}`);
+    await dispatchWav(wav);
+    break;
+  }
+
+  case "reprocess": {
+    const arg = positional();
+    if (!arg) die("usage: murmur reprocess <name|path>");
+    const wav = await resolveWav(cfg, arg);
+    if (!wav) die(`recording not found: ${arg}`);
+    await dispatchWav(wav);
+    break;
+  }
+
+  case "retry-failed": {
+    let names: string[];
+    try {
+      names = readdirSync(cfg.paths.failedDir).filter((f) => f.endsWith(".wav"));
+    } catch {
+      names = [];
     }
+    if (names.length === 0) {
+      console.log("no failed recordings to retry");
+      break;
+    }
+    console.log(`retrying ${names.length} failed recording(s)…`);
+    for (const n of names) await dispatchWav(cfg.paths.failedWav(basename(n, ".wav")));
     break;
   }
 
@@ -174,21 +286,14 @@ switch (cmd) {
     break;
   }
 
+  case "help":
+  case "-h":
+  case "--help":
+    console.log(USAGE);
+    break;
+
   default:
-    console.log(`murmur — local meeting recorder / transcriber / summarizer
-
-Usage: murmur <command> [args]
-
-  record [--device N]     start recording the Aggregate Device (ffmpeg)
-  stop                    stop the current recording
-  process [audio]         transcribe + summarize (newest, or by path/basename)
-  transcribe [audio]      transcribe only → prints transcript path
-  summarize <transcript>  summarize a transcript → prints summary path
-  status                  recording / pause / queue state (JSON)
-  pause [hard]            pause processing (soft = finish current; hard = abort + requeue)
-  resume                  resume processing
-  daemon                  run the orchestrator daemon in the foreground
-
-Stateful commands use the daemon if it's running, else act directly.`);
-    if (cmd !== "help") process.exit(1);
+    console.error(`unknown command: ${cmd}\n`);
+    console.log(USAGE);
+    process.exit(1);
 }

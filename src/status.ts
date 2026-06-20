@@ -1,5 +1,6 @@
 // One shared shape + builder for "what is murmur doing right now", so the daemon's
 // GET /status, the CLI's offline `status`, and the SwiftBar renderer can't drift.
+import { readdirSync } from "node:fs";
 import type { Config } from "./config.ts";
 import type { Recorder } from "./recorder.ts";
 import { MeetingRecorder } from "./recorder.ts";
@@ -14,6 +15,7 @@ export interface StatusSnapshot {
   queueDepth: number;
   queue: string[]; // basenames
   current: CurrentJob | null;
+  failedCount: number; // wavs parked in recordings/failed/
 }
 
 export async function statusSnapshot(
@@ -29,6 +31,7 @@ export async function statusSnapshot(
     queueDepth: queueItems.length,
     queue: queueItems.map((i) => i.basename),
     current: await readCurrent(cfg),
+    failedCount: countFailed(cfg),
   };
 }
 
@@ -39,4 +42,37 @@ export async function offlineSnapshot(cfg: Config): Promise<StatusSnapshot> {
   const pause = await PauseStore.load(cfg);
   const queue = await readJson<{ items: QueueItem[] }>(cfg.paths.queueFile, { items: [] });
   return statusSnapshot(cfg, recorder, pause, queue.items);
+}
+
+/** Count recordings parked in recordings/failed/ (wavs awaiting `murmur retry-failed`). */
+function countFailed(cfg: Config): number {
+  try {
+    return readdirSync(cfg.paths.failedDir).filter((f) => f.endsWith(".wav")).length;
+  } catch {
+    return 0;
+  }
+}
+
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${m % 60}m`;
+}
+
+/** Compact human render of a snapshot — the default for `murmur status`. The daemon's
+ *  GET /status returns the raw JSON (also available via `--json`); this is the human view
+ *  of the same shape, kept here so the two can't drift. */
+export function renderStatus(s: StatusSnapshot & { daemon?: string }): string {
+  const lines = [
+    `daemon:    ${s.daemon ?? "running"}`,
+    `recording: ${s.recording ? s.recordingFile?.split("/").pop() ?? "yes" : "idle"}`,
+    `pause:     ${s.pause}`,
+    s.current
+      ? `current:   ${s.current.basename} (${s.current.stage}, ${fmtElapsed(Date.now() - s.current.startedAt)})`
+      : "current:   none",
+    `queue:     ${s.queueDepth}${s.queueDepth > 0 ? " — " + s.queue.join(", ") : ""}`,
+  ];
+  if (s.failedCount > 0) lines.push(`failed:    ${s.failedCount} (run: murmur retry-failed)`);
+  return lines.join("\n");
 }
