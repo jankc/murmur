@@ -20,7 +20,7 @@ record (system + mic) ─▶ .partial/ ─(complete, →FLAC)─▶ inbox/*.flac
 brew install ffmpeg ollama uv terminal-notifier    # terminal-notifier optional (notifications)
 # Bun — via mise, or: curl -fsSL https://bun.sh/install | bash
 # uv  — via mise/brew (above), or: curl -fsSL https://astral.sh/uv/install.sh | sh   (drives the ASR venv)
-ollama pull gemma3:12b                              # any Ollama chat model; set it as MODEL_SUMMARY
+ollama pull gemma3:12b                              # any Ollama chat model; set it as [summary].model
 ```
 > The `*-mlx` tags in `murmur.toml.example` (e.g. `gemma4:26b-mlx`) are **custom local MLX builds**, not on the Ollama registry — create them with `ollama create`, or just use any standard pullable model.
 `ffmpeg`, `ollama` + a pulled model, `bun`, and `uv` are required; `terminal-notifier` is optional. Building the `ownscribe` recording helper (below) also needs the **Xcode Command Line Tools** (`xcode-select --install`).
@@ -39,7 +39,7 @@ ln -s "$PWD/src/cli.ts" ~/.local/bin/murmur
 
 Set up audio capture (see [Recording backends](#recording-backends) for the trade-offs):
 - **`ownscribe`** (recommended) — build the Swift helper (steps under [Recording backends](#recording-backends)); needs no BlackHole or Aggregate Device, and keeps the volume keys working.
-- **`ffmpeg`** (default) — install BlackHole and create an **Aggregate Device** (mic + system audio) in *Audio MIDI Setup*, then note its avfoundation index for `RECORD_DEVICE_INDEX`:
+- **`ffmpeg`** (default) — install BlackHole and create an **Aggregate Device** (mic + system audio) in *Audio MIDI Setup*, then note its avfoundation index for `[recording].device_index`:
   ```sh
   brew install blackhole-2ch
   ffmpeg -f avfoundation -list_devices true -i ""
@@ -62,9 +62,15 @@ hf_token = "hf_xxx"         # required for diarization
 backend = "ownscribe"       # recommended (see Recording backends); omit for the ffmpeg default
 # device_index = "1"        # ffmpeg backend only: avfoundation index of your Aggregate Device
 ```
-Paths may start with `~/`. Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-community/whisper-large-v3-turbo`, language `auto`-detect, `max_duration_seconds = 7200`, …). An **environment variable overrides the file** — handy for keeping a secret out of `murmur.toml` (set `HF_TOKEN` in the plist's `EnvironmentVariables`, or keep it in the legacy `config.sh`).
+Paths may start with `~/`. Defaults for everything else live in `src/config.ts` (port 7461, ASR model `mlx-community/whisper-large-v3-turbo`, language `auto`-detect, `max_duration_seconds = 7200`, …).
 
-> Config is layered **env > `murmur.toml` > `config.sh` > defaults**, so the legacy `config.sh` still works *underneath* `murmur.toml` (and `sources.json` is read only when `murmur.toml` has no `[[sources]]`). That layering is exactly what lets you keep config in `murmur.toml` while a sourced secret like `HF_TOKEN` stays in `config.sh`.
+**Keeping a secret out of the file:** instead of writing `hf_token` inline, set `secrets_command` — an arbitrary shell command murmur runs at startup (with `set -a`), capturing any recognized var it exports (currently `HF_TOKEN`). Source a cache or call a secrets manager:
+```toml
+secrets_command = 'export HF_TOKEN="$(op read op://Private/HuggingFace/token)"'
+# or: secrets_command = '[ -f "$HOME/.secrets-cache" ] && source "$HOME/.secrets-cache"'
+```
+
+> Precedence is **env > `murmur.toml` > shell layer > defaults**, where the *shell layer* is `secrets_command` plus the legacy `config.sh` (still sourced if present). `sources.json` is likewise read only when `murmur.toml` defines no `[[sources]]`. So an older `config.sh`/`sources.json` setup keeps working, and a sourced secret fills in underneath your config. An environment variable (e.g. in the launchd plist) overrides everything.
 
 ## Usage — the `murmur` CLI
 
