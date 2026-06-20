@@ -5,12 +5,13 @@
   <key>Label</key>
   <string>com.jank.murmur.daemon</string>
 
-  <!-- Absolute path to bun (mise install). If you reinstall/upgrade bun, update this. -->
+  <!-- Entrypoint wrapper: sources config.sh and execs the daemon with stdout/stderr
+       redirected to $MEETINGS_BASE/logs, so config.sh is the single source of truth for
+       the log location (launchd does no variable expansion in plists). bun is resolved
+       from the PATH in EnvironmentVariables below — update that if you upgrade bun. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/jank/.local/share/mise/installs/bun/latest/bin/bun</string>
-    <string>run</string>
-    <string>/Users/jank/dev/personal/murmur/src/main.ts</string>
+    <string>/Users/jank/dev/personal/murmur/launchd/run-daemon.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -29,10 +30,9 @@
     <string>/Users/jank/.local/share/mise/installs/bun/latest/bin:/Users/jank/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
-  <key>StandardOutPath</key>
-  <string>/Users/jank/Recordings/Meetings/logs/daemon.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/jank/Recordings/Meetings/logs/daemon.err.log</string>
+  <!-- No StandardOut/ErrorPath here: run-daemon.sh redirects the daemon's stdout/stderr
+       to $MEETINGS_BASE/logs/daemon.{out,err}.log, derived from config.sh. -->
+
 
   <key>ProcessType</key>
   <string>Background</string>
