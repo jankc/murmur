@@ -9,6 +9,7 @@ import { MeetingRecorder } from "./recorder.ts";
 import { Worker } from "./worker.ts";
 import { startControl } from "./control.ts";
 import { startWatcher } from "./watcher.ts";
+import { runChecks } from "./health.ts";
 import { log } from "./log.ts";
 
 export async function runDaemon(cfg: Config): Promise<void> {
@@ -103,15 +104,14 @@ async function acquireLock(cfg: Config): Promise<boolean> {
 
 async function selfCheck(cfg: Config): Promise<void> {
   const diarize = cfg.diarize && !!cfg.hfToken;
-  log.info("daemon", `asr model=${cfg.asrModel} lang=${cfg.language} python=${cfg.pythonBin} (${(await Bun.file(cfg.pythonBin).exists()) ? "found" : "MISSING"}) diarize=${diarize}${diarize && cfg.numSpeakers ? ` num_speakers=${cfg.numSpeakers}` : ""}`);
+  log.info("daemon", `asr model=${cfg.asrModel} lang=${cfg.language} diarize=${diarize}${diarize && cfg.numSpeakers ? ` num_speakers=${cfg.numSpeakers}` : ""}`);
   log.info("daemon", `ollama: ${cfg.ollamaHost} model=${cfg.modelSummary}`);
-  if (cfg.recordBackend === "ownscribe") {
-    log.info("daemon", `recorder backend=ownscribe bin=${cfg.ownscribeBin} (${(await Bun.file(cfg.ownscribeBin).exists()) ? "found" : "MISSING"})`);
-  } else {
-    log.info("daemon", `recorder backend=ffmpeg device index=${cfg.recordDeviceIndex}`);
+  log.info("daemon", `recorder backend=${cfg.recordBackend}${cfg.recordBackend === "ffmpeg" ? ` device index=${cfg.recordDeviceIndex}` : ""}`);
+  // Shared with `murmur doctor`; the daemon only logs (it doesn't refuse to start).
+  for (const c of await runChecks(cfg)) {
+    const msg = `check ${c.name}: ${c.ok ? "ok" : c.detail}`;
+    if (c.ok) log.info("daemon", msg);
+    else if (c.level === "error") log.error("daemon", msg);
+    else log.warn("daemon", msg);
   }
-  const ollamaUp = await fetch(`${cfg.ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) })
-    .then((r) => r.ok)
-    .catch(() => false);
-  log.info("daemon", `ollama reachable: ${ollamaUp}`);
 }

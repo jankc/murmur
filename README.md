@@ -14,6 +14,8 @@ record (system + mic) ─▶ .partial/ ─(complete)─▶ inbox/*.wav ─▶ as
 
 ## Install
 
+> Fast path: after the prerequisites below, `bash scripts/setup.sh` runs the whole install (ASR venv, CLI symlink, capture build, daemon) idempotently; then `murmur doctor` verifies it.
+
 ```sh
 brew install ffmpeg ollama uv terminal-notifier    # terminal-notifier optional (notifications)
 # Bun — via mise, or: curl -fsSL https://bun.sh/install | bash
@@ -70,6 +72,8 @@ murmur summarize <name>      # summarize a transcript → prints summary path
 murmur status [--json]       # recording / pause / queue / failures (human; --json for tools)
 murmur pause [hard]          # pause processing (soft = finish current; hard = abort + requeue)
 murmur resume
+murmur doctor                # verify setup (venv, ffmpeg, ollama+model, ownscribe, …)
+murmur logs [-f]             # tail the daemon logs (-f to follow)
 murmur daemon <sub>          # run | start | stop | restart | install — manage the LaunchAgent
 ```
 

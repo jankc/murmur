@@ -30,6 +30,7 @@ export interface Config {
   recordDeviceIndex: string; // ffmpeg backend: avfoundation index of the Aggregate Device
   ownscribeBin: string; // ownscribe backend: path to the ownscribe-audio binary (synced system+mic)
   maxDurationSeconds: number;
+  processTimeoutSeconds: number; // per-stage wall-clock backstop — kills a wedged ASR/ollama job
   panFilter: string; // ffmpeg backend: filter that downmixes the Aggregate Device to mono
   silenceDb: number; // warn after stop if a track's peak dBFS is at/below this
 
@@ -57,6 +58,7 @@ const KEYS = [
   "RECORD_DEVICE_INDEX",
   "OWNSCRIBE_BIN",
   "MAX_DURATION_SECONDS",
+  "PROCESS_TIMEOUT_SECONDS",
   "RECORD_PAN_FILTER",
   "RECORD_SILENCE_DB",
   "OBSIDIAN_VAULT",
@@ -147,6 +149,7 @@ export function loadConfig(): Config {
     recordDeviceIndex: pick("RECORD_DEVICE_INDEX", "0"),
     ownscribeBin: pick("OWNSCRIBE_BIN", join(home, ".local/bin/ownscribe-audio")),
     maxDurationSeconds: num("MAX_DURATION_SECONDS", 7200),
+    processTimeoutSeconds: num("PROCESS_TIMEOUT_SECONDS", 7200),
     panFilter: pick("RECORD_PAN_FILTER", DEFAULT_PAN_FILTER),
     silenceDb: num("RECORD_SILENCE_DB", -80),
     childPath: buildChildPath(pythonBin),

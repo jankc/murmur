@@ -4,7 +4,7 @@
 // pause/status) talk to the daemon when it's running, and fall back to doing the work
 // directly when it isn't; one-shot transcribe/summarize always run inline.
 import { basename, dirname, join } from "node:path";
-import { readdirSync, statSync, existsSync, copyFileSync, mkdirSync } from "node:fs";
+import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { userInfo } from "node:os";
 import { loadConfig, type Config } from "./config.ts";
 import { runDaemon } from "./daemon.ts";
@@ -18,6 +18,7 @@ import { PauseStore } from "./jobstate.ts";
 import { sleep } from "./util.ts";
 import { offlineSnapshot, renderStatus, type StatusSnapshot } from "./status.ts";
 import { renderSwiftBar } from "./swiftbar.ts";
+import { runChecks } from "./health.ts";
 
 const cfg = loadConfig();
 const [cmd = "help", ...rest] = process.argv.slice(2);
@@ -116,10 +117,16 @@ async function daemonctl(cfg: Config, action: "start" | "stop" | "restart" | "in
   const bootstrap = () => launchctl("bootstrap", domain, installed);
 
   if (action === "install") {
-    const repoPlist = join(cfg.repoDir, "launchd", `${DAEMON_LABEL}.plist`);
-    if (!existsSync(repoPlist)) die(`plist not found: ${repoPlist}`);
+    const tmpl = join(cfg.repoDir, "launchd", `${DAEMON_LABEL}.plist.example`);
+    if (!existsSync(tmpl)) die(`plist template not found: ${tmpl}`);
+    // Render the machine paths from the running environment (process.execPath is this very
+    // bun) so there's nothing to hand-edit; run-daemon.sh derives the log path from config.sh.
+    const rendered = readFileSync(tmpl, "utf8")
+      .replaceAll("__REPO__", cfg.repoDir)
+      .replaceAll("__HOME__", userInfo().homedir)
+      .replaceAll("__BUN_DIR__", dirname(process.execPath));
     mkdirSync(dirname(installed), { recursive: true });
-    copyFileSync(repoPlist, installed);
+    writeFileSync(installed, rendered);
     console.log(`installed → ${installed}`);
   } else if (!existsSync(installed)) {
     die(`daemon not installed (${installed} missing) — run: murmur daemon install`);
@@ -158,6 +165,8 @@ Usage: murmur <command> [args]
   status [--json]          recording / pause / queue / failures (human; --json for tools)
   pause [hard]             pause processing (soft = finish current; hard = abort + requeue)
   resume                   resume processing
+  doctor                   check setup (venv, ffmpeg, ollama+model, ownscribe, …) → non-zero on problems
+  logs [failures] [-f]     tail the daemon logs (or process-failures.log); -f to follow
   daemon <sub>             run | start | stop | restart | install (manage the LaunchAgent)
 
 Stateful commands use the daemon if it's running, else act directly.`;
@@ -227,6 +236,35 @@ switch (cmd) {
   case "swiftbar": {
     // Used by the SwiftBar plugin; renders from on-disk state (daemon-independent).
     process.stdout.write(await renderSwiftBar(cfg, process.execPath, import.meta.path));
+    break;
+  }
+
+  case "doctor": {
+    const checks = await runChecks(cfg);
+    for (const c of checks) {
+      const icon = c.ok ? "✓" : c.level === "error" ? "✗" : "⚠";
+      console.log(`${icon} ${c.name}: ${c.ok ? "ok" : c.detail}`);
+    }
+    const failed = checks.filter((c) => !c.ok && c.level === "error");
+    if (failed.length > 0) die(`\n${failed.length} check(s) failed`);
+    console.log("\nall good");
+    break;
+  }
+
+  case "logs": {
+    const which = positional(); // "failures" → process-failures.log; else the daemon logs
+    const follow = rest.includes("-f") || rest.includes("--follow");
+    const files =
+      which === "failures"
+        ? [cfg.paths.failureLog]
+        : [join(cfg.paths.logsDir, "daemon.out.log"), join(cfg.paths.logsDir, "daemon.err.log")];
+    const existing = files.filter((f) => existsSync(f));
+    if (existing.length === 0) {
+      console.log(`no logs yet under ${cfg.paths.logsDir}`);
+      break;
+    }
+    const tailArgs = follow ? ["-n", "40", "-F", ...existing] : ["-n", "80", ...existing];
+    await Bun.spawn(["tail", ...tailArgs], { stdout: "inherit", stderr: "inherit", stdin: "ignore" }).exited;
     break;
   }
 

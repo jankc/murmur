@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jank.murmur.daemon</string>
+
+  <!-- Template rendered by `murmur daemon install`: __REPO__, __HOME__, and __BUN_DIR__
+       are substituted from the running environment, so there are no hand-edited machine
+       paths. Edit this template, not the installed ~/Library/LaunchAgents copy. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/launchd/run-daemon.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__/src</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- run-daemon.sh also prepends the mise shims, so bun resolves even if this entry goes
+       stale; ffmpeg/ollama/python/terminal-notifier resolve from here. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__BUN_DIR__:__HOME__/.local/share/mise/shims:__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <!-- No StandardOut/ErrorPath: run-daemon.sh redirects the daemon's stdout/stderr to
+       $MEETINGS_BASE/logs/daemon.{out,err}.log, derived from config.sh. -->
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

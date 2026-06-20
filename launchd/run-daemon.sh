@@ -21,5 +21,7 @@ LOGDIR="$BASE/logs"
 mkdir -p "$LOGDIR"
 
 cd "$REPO_DIR/src"
-# bun resolves from the PATH set in the plist's EnvironmentVariables.
+# Resolve bun robustly: prepend the stable mise shims (a version-pinned mise path in the
+# plist can vanish when mise GCs an old bun) ahead of whatever the plist PATH provides.
+export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/opt/homebrew/bin:$PATH"
 exec bun run "$REPO_DIR/src/main.ts" >>"$LOGDIR/daemon.out.log" 2>>"$LOGDIR/daemon.err.log"

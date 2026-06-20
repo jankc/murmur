@@ -85,6 +85,14 @@ async function runAsr(cfg: Config, label: string, wav: string, signal: AbortSign
     stderr: logFd,
   });
 
+  // Wall-clock backstop: kill a wedged helper so it can't stall the queue forever.
+  // PROCESS_TIMEOUT_SECONDS (default 2h) is well above any real transcription.
+  let timedOut = false;
+  const stageTimer = setTimeout(() => {
+    timedOut = true;
+    try { proc.kill("SIGKILL"); } catch {}
+  }, cfg.processTimeoutSeconds * 1000);
+
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const onAbort = () => {
     try { proc.kill("SIGTERM"); } catch {}
@@ -98,12 +106,14 @@ async function runAsr(cfg: Config, label: string, wav: string, signal: AbortSign
   try {
     [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
   } finally {
+    clearTimeout(stageTimer);
     if (killTimer) clearTimeout(killTimer);
     signal.removeEventListener("abort", onAbort);
     try { closeSync(logFd); } catch {}
   }
 
   if (signal.aborted) throw new AbortError("asr aborted");
+  if (timedOut) throw new EngineError(`asr timed out after ${cfg.processTimeoutSeconds}s (see ${logPath})`, 124);
   if (code !== 0) throw new EngineError(`asr exited ${code} (see ${logPath})`, code, stdout.slice(-1000));
   try {
     const parsed = JSON.parse(stdout) as Partial<AsrOutput>;

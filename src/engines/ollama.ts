@@ -1,7 +1,7 @@
 // Summarization via Ollama's HTTP API, preserving the existing Czech prompt and
 // model (configurable via MODEL_SUMMARY). Preflight Ollama (start the
 // app + wait if down), prepend prompts/summary.md, write summaries/<base>.md.
-import { basename as pathBasename } from "node:path";
+import { basename as pathBasename, join } from "node:path";
 import type { Config } from "../config.ts";
 import { sleep } from "../util.ts";
 import { log } from "../log.ts";
@@ -47,23 +47,32 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
   ].join("\n");
 
   log.info("ollama", `summarizing ${base} with ${cfg.modelSummary}`);
+  // Backstop a wedged ollama (MPS deadlock etc.) so it can't stall the queue forever; the
+  // user's hard-pause signal still aborts independently. PROCESS_TIMEOUT_SECONDS (default 2h)
+  // is well above any real summarize, so it never trips a legitimate job.
+  const timeout = AbortSignal.timeout(cfg.processTimeoutSeconds * 1000);
   let res: Response;
   try {
     res = await fetch(`${cfg.ollamaHost}/api/generate`, {
       method: "POST",
-      signal,
+      signal: AbortSignal.any([signal, timeout]),
       headers: { "content-type": "application/json" },
       // temperature 0 = greedy decoding: follows the prompt's rules far more reliably
       // and avoids the random "empty/test" misclassification of real transcripts.
-      // (qwen3.6-mlx isn't bit-reproducible on Metal, but it reliably summarizes.)
       body: JSON.stringify({ model: cfg.modelSummary, prompt, stream: false, think: false, options: { temperature: 0 } }),
     });
   } catch (err) {
     if (signal.aborted || isAbort(err)) throw new AbortError("ollama aborted");
+    if (timeout.aborted) throw new EngineError(`ollama timed out after ${cfg.processTimeoutSeconds}s`, 124);
     throw new EngineError(`ollama request failed: ${String(err)}`, 1);
   }
   if (!res.ok) {
-    throw new EngineError(`ollama HTTP ${res.status}`, res.status, (await res.text()).slice(-2000));
+    // Capture the failing body to a per-recording log so a failure is traceable (the
+    // interleaved daemon log only keeps one truncated line).
+    const body = (await res.text()).slice(-4000);
+    const logPath = join(cfg.paths.logsDir, `summary-${base}.log`);
+    await Bun.write(logPath, `ollama HTTP ${res.status} for ${base} with ${cfg.modelSummary}\n\n${body}\n`).catch(() => {});
+    throw new EngineError(`ollama HTTP ${res.status} (see ${logPath})`, res.status, body.slice(-2000));
   }
   const { response } = (await res.json()) as { response: string };
 

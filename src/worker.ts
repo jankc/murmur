@@ -8,7 +8,7 @@ import { move } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
 import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
 import { transcribe } from "./engines/asr.ts";
-import { summarize } from "./engines/ollama.ts";
+import { summarize, EMPTY_MARKER } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { EngineError, isAbort } from "./engines/errors.ts";
 import { logFailure } from "./failures.ts";
@@ -107,8 +107,16 @@ export class Worker {
       await move(this.cfg, job.basename, "processed");
       await this.queue.commitDequeue(job.basename);
       await clearCurrent(this.cfg);
-      log.info("worker", `completed ${job.basename}`);
-      notify(this.cfg, `Summary ready: ${job.basename}`);
+      // A no-speech recording produces an empty-marker summary and no vault note — surface
+      // that instead of a misleading "Summary ready", so a silent capture isn't mistaken for success.
+      const summaryText = await Bun.file(this.cfg.paths.summary(job.basename)).text().catch(() => "");
+      if (summaryText.trimStart().startsWith(EMPTY_MARKER)) {
+        log.warn("worker", `${job.basename}: no speech detected — empty summary, no vault note`);
+        notify(this.cfg, `⚠️ ${job.basename}: no speech detected (empty recording)`);
+      } else {
+        log.info("worker", `completed ${job.basename}`);
+        notify(this.cfg, `Summary ready: ${job.basename}`);
+      }
     } catch (err) {
       if (isAbort(err) || ac.signal.aborted) {
         await this.queue.requeueFront(job.basename, job.wavPath);

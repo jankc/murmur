@@ -24,21 +24,27 @@ upstream sync tooling, `MEETINGS_BASE`→log-path launchd wrapper, data relocati
 - [x] **6. Exit-code & feedback hygiene** — `stop` exits 0 on failure; `pause`/`resume` print
   success without checking the daemon response; `-h`/`--help` exits 1. `cli.ts:101-194`
 
-## Bigger ergonomic wins (M-effort)
+## Bigger ergonomic wins (M-effort) — ✅ shipped 2026-06-20
 
-- [ ] **Setup/uninstall helper** — idempotent `scripts/setup.sh` + `uninstall.sh`, replacing
+> Notes: the per-stage **timeout** shipped (`PROCESS_TIMEOUT_SECONDS` routes a wedged ASR/ollama
+> job to `failed/`), but the poison-job **attempts-cap** was intentionally left out — hard-pause
+> requeue is user-driven, and timeouts already unblock the queue. Log correlation: ollama gained a
+> per-recording error log (`summary-<base>.log`) + `murmur logs`; universal basename-prefixing of
+> every log line was deferred (most lines already carry the basename).
+
+- [x] **Setup/uninstall helper** — idempotent `scripts/setup.sh` + `uninstall.sh`, replacing
   ~12 manual steps; no uninstall path exists today. `README.md:15-43`
-- [ ] **`murmur doctor`** — preflight venv / ffmpeg / ollama+model-present / ownscribe /
+- [x] **`murmur doctor`** — preflight venv / ffmpeg / ollama+model-present / ownscribe /
   HF_TOKEN; reuse in `selfCheck`. Auto-catches a missing summary model. `daemon.ts:104-117`
-- [ ] **Plist portability** — 5× hardcoded `/Users/jank` paths and a brittle mise `latest` bun
+- [x] **Plist portability** — 5× hardcoded `/Users/jank` paths and a brittle mise `latest` bun
   path (vanishes on bun GC → daemon silently won't launch). Ship `.plist.example` with
   placeholders; resolve bun via `mise which bun`. `plist:14,18,30`, `run-daemon.sh`
-- [ ] **Empty-result clarity** — a no-speech recording notifies "Summary ready" and silently
+- [x] **Empty-result clarity** — a no-speech recording notifies "Summary ready" and silently
   skips the vault. Warn "⚠️ no speech detected" instead. `worker.ts:107-111`, `asr.ts:39-43`, `archive.ts:28-31`
-- [ ] **Per-stage timeout + poison-job cap** — no wall-clock timeout on the ASR child or ollama
+- [x] **Per-stage timeout** (+ poison-job cap deferred — see note above) — no wall-clock timeout on the ASR child or ollama
   fetch; hard-pause `requeueFront`s a wedged job forever (`attempts` incremented, never read).
   `ollama.ts:52`, `asr.ts:80`, `worker.ts:142-147`, `queue.ts:86-92`
-- [ ] **Log correlation** — daemon log interleaves all jobs; ollama has no per-recording log
+- [x] **Log correlation** (per-recording ollama log + `murmur logs`; full prefixing deferred) — daemon log interleaves all jobs; ollama has no per-recording log
   (README claims each stage does). Prefix log lines with basename; add `murmur logs [-f]`.
   `log.ts`, `cli.ts`, `ollama.ts`
 

@@ -9,6 +9,7 @@ export MODEL_SUMMARY="gemma3:12b"               # any Ollama chat model. NOTE: *
 
 # --- Daemon / ASR (optional) ---
 # export MURMUR_PORT=7461                      # localhost control API port
+# export PROCESS_TIMEOUT_SECONDS=7200          # per-stage wall-clock backstop (kills a wedged ASR/ollama job)
 # export ASR_MODEL="mlx-community/whisper-large-v3-turbo"   # mlx-whisper model (hf repo)
 # export ASR_LANG="auto"                       # auto-detect per recording; set "cs"/"en"/… to force.
 #                                              # Forcing a language drops speech in OTHER languages —
