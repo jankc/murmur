@@ -72,6 +72,7 @@ Paths may start with `~/`. Defaults for everything else live in `src/config.ts` 
 murmur record [--device N]   # start recording (system audio + your mic; --device sets the ffmpeg Aggregate Device index)
 murmur stop                  # stop recording
 murmur process [audio]       # transcribe + summarize (newest, or by path/basename)
+murmur import                # pull new recordings from external sources (murmur.toml [[sources]]) into inbox/
 murmur reprocess <name>      # re-run the pipeline for one recording (incl. one in recordings/failed/)
 murmur retry-failed          # re-enqueue everything in recordings/failed/
 murmur transcribe [audio]    # transcribe only → prints transcript path
