@@ -6,5 +6,5 @@ OUT="$("$MURMUR" swiftbar 2>/dev/null || true)"
 if [[ -n "$OUT" ]]; then
   printf '%s' "$OUT"
 else
-  printf '⚪\n---\nmurmur unavailable\n'
+  printf '| sfimage=waveform.circle\n---\nmurmur unavailable\n'
 fi

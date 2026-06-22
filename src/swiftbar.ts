@@ -16,8 +16,29 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
     return `${label} | bash=${bun} ${params} terminal=false refresh=true`;
   };
 
-  const title = recording ? "🔴" : paused ? "⏸" : s.failedCount > 0 ? "⚠️" : "⚪";
-  const lines: string[] = [depth > 0 ? `${title} ${depth}` : title, "---"];
+  const symbol = recording
+    ? "waveform.circle.fill"
+    : paused
+    ? "pause.circle.fill"
+    : s.failedCount > 0
+    ? "exclamationmark.circle.fill"
+    : "waveform.circle";
+  // Tint via sfconfig (palette rendering) rather than sfcolor — sfcolor on a title-line
+  // sfimage is unreliable (swiftbar/SwiftBar#364). For *.circle.fill symbols the subject
+  // (waveform / exclamation) is layer 0 and the surrounding circle is layer 1, so we paint
+  // the subject in the menubar's own tint (looks identical to the idle icon) and only color
+  // the ring. OS_APPEARANCE is a SwiftBar-provided env var ("Light" | "Dark").
+  const appearance = process.env.OS_APPEARANCE ?? "Light";
+  const neutral = appearance === "Dark" ? "#f5f5f7" : "#1d1d1f";
+  const sfconfig = (subject: string, ring: string): string =>
+    ` sfconfig=${Buffer.from(JSON.stringify({ renderingMode: "Palette", colors: [subject, ring] })).toString("base64")}`;
+  const tint = recording
+    ? sfconfig(neutral, "#FF3B30")
+    : s.failedCount > 0
+    ? sfconfig(neutral, "#FFD60A")
+    : "";
+  const title = `${depth > 0 ? `${depth} ` : ""}| sfimage=${symbol}${tint}`;
+  const lines: string[] = [title, "---"];
 
   if (recording) {
     if (s.recordingFile) lines.push(`Recording: ${s.recordingFile.split("/").pop()} | color=red`);
