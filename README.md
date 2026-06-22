@@ -15,6 +15,8 @@ record (system + mic) ─▶ .partial/ ─(complete, →FLAC)─▶ inbox/*.flac
 ## Install
 
 > Fast path: after the prerequisites below, `bash scripts/setup.sh` runs the whole install (ASR venv, CLI symlink, capture build, daemon) idempotently; then `murmur doctor` verifies it.
+>
+> To uninstall: `bash scripts/uninstall.sh` removes the daemon and the `murmur` CLI symlink; it leaves `murmur.toml`, your recordings/transcripts/summaries, the ASR venv, and the `ownscribe-audio` binary in place.
 
 ```sh
 brew install ffmpeg ollama uv terminal-notifier    # terminal-notifier optional (notifications)
@@ -163,12 +165,14 @@ The originals in `$MEETINGS_BASE/summaries` stay the source of truth — the vau
 ```yaml
 ---
 title: "Workflow nahrávání meetingů"
+type: summary          # what triage detected: summary | dictation | list | journal | lecture
+lang: cs               # cs or en
 date: 2026-06-18
 time: "16:21"
 source: "meeting-2026-06-18_16-21-05.flac"
 duration: "1:13:25"
 speakers: 2            # only when diarized
-tags: [meeting, murmur]
+tags: [murmur, meeting]   # the special types tag #dictation/#list/#journal/#lecture instead of #meeting
 ---
 ```
 
@@ -182,6 +186,7 @@ Archiving replaces any prior note for the same recording (matched on the `YYYY-M
 - The `asr/asr.py` helper reads the recording read-only and prints its result (transcript chunks + speaker turns) as JSON on stdout, so murmur writes straight to the flat `transcripts/<base>.txt`. Your recordings are never mutated.
 - Each pipeline stage streams to its own log under `logs/`: recording → `meeting-<ts>.log`, asr → `asr-<base>.log` (the helper's stderr — model load + progress + a failure's tail; stdout carries the JSON payload murmur parses), and an ollama failure → `summary-<base>.log` (the failing response body). The daemon's own stdout/stderr go to `daemon.{out,err}.log` (`murmur logs`).
 - Summaries use `temperature: 0` for reliable, deterministic instruction-following.
+- **Per-type summaries.** Before summarizing, a quick triage call classifies each recording and routes it to a matching template in `prompts/` (`base.md` holds the shared rules; `types/<type>.md` the body): `summary` (the default — meetings, notes, conversations, anything ambiguous), `dictation` (returns the cleaned-up dictated text), `list` (items verbatim), `journal` (reflection, no imposed tasks), `lecture` (knowledge capture for talks/podcasts/interviews). Triage reuses `[summary].model`; edit the files to tweak any treatment. Output is Czech or English (mirrors the recording; any other apparent language is treated as a mis-transcription → Czech).
 - Daemon state lives in `$MEETINGS_BASE/state/` (`queue.json`, `pause.json`, `current.json`, `recording.json`, `daemon.lock`) — inspectable, persistent across restarts. Failures are logged to `$MEETINGS_BASE/logs/process-failures.log`.
 - `murmur.toml` is the one config file (parsed by Bun's native TOML loader); `launchd/run-daemon.sh` is the only shell script — it just resolves the log path via `murmur print-env` before `exec`ing the daemon. All logic is TypeScript in `src/`.
 

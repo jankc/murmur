@@ -1,6 +1,6 @@
-// Summarization via Ollama's HTTP API, preserving the existing Czech prompt and
-// model (configurable via MODEL_SUMMARY). Preflight Ollama (start the
-// app + wait if down), prepend prompts/summary.md, write summaries/<base>.md.
+// Summarization via Ollama's HTTP API (model configurable via MODEL_SUMMARY). Preflight Ollama
+// (start the app + wait if down), classify the recording (triage), assemble prompts/base.md +
+// prompts/types/<type>.md, then write summaries/<base>.md.
 import { basename as pathBasename, join } from "node:path";
 import type { Config } from "../config.ts";
 import { sleep } from "../util.ts";
@@ -11,7 +11,7 @@ import { AbortError, EngineError, isAbort } from "./errors.ts";
 // rather than left to the model, which over-classifies real rambly speech as "test audio".
 // archive.ts skips notes whose summary contains "prázdný nebo testovací".
 export const EMPTY_MARKER = "Transcript je prázdný nebo testovací — žádné shrnutí.";
-const MIN_WORDS = 25;
+export const MIN_WORDS = 25;
 
 // Count real spoken words, ignoring diarization markup ([00:00:01.2], [SPEAKER_00]).
 export function wordCount(transcript: string): number {
@@ -22,7 +22,71 @@ export function wordCount(transcript: string): number {
     .filter(Boolean).length;
 }
 
-export async function summarize(cfg: Config, transcriptPath: string, signal: AbortSignal): Promise<string> {
+// The recording kinds triage routes to. "summary" is the default/fallback (meetings, notes,
+// dialogues, anything ambiguous); the others each get a different treatment (see prompts/types/).
+export type TriageType = "summary" | "dictation" | "list" | "journal" | "lecture";
+const TRIAGE_TYPES: readonly TriageType[] = ["summary", "dictation", "list", "journal", "lecture"];
+
+export interface Triage {
+  type: TriageType;
+  language: "cs" | "en";
+}
+
+export interface SummarizeResult {
+  summaryPath: string;
+  type: TriageType;
+  language: "cs" | "en";
+}
+
+// Classification rarely needs the whole transcript; cap the head fed to the triage call.
+const TRIAGE_HEAD_CHARS = 6000;
+
+const basePromptPath = (cfg: Config) => join(cfg.promptsDir, "base.md");
+const triagePromptPath = (cfg: Config) => join(cfg.promptsDir, "triage.md");
+const typePromptPath = (cfg: Config, type: TriageType) => join(cfg.promptsDir, "types", `${type}.md`);
+
+// Parse the triage model's JSON. Falls back to the safe default ({summary, cs}) on any miss —
+// a flaky classify call can never break summarization (worst case: the generic summary template).
+// Extracts the first {...} object because models (e.g. gemma *-mlx) wrap it in a ```json fence
+// even when format:"json" is requested.
+export function parseTriage(response: string): Triage {
+  try {
+    const start = response.indexOf("{");
+    const end = response.lastIndexOf("}");
+    const json = start >= 0 && end > start ? response.slice(start, end + 1) : response;
+    const obj = JSON.parse(json) as { type?: unknown; language?: unknown };
+    const type = TRIAGE_TYPES.includes(obj.type as TriageType) ? (obj.type as TriageType) : "summary";
+    const language = obj.language === "en" ? "en" : "cs";
+    return { type, language };
+  } catch {
+    return { type: "summary", language: "cs" };
+  }
+}
+
+// Ask the model to classify the recording (type + language). format:"json" constrains the output;
+// parseTriage tolerates anything that slips through. Reuses modelSummary — no separate triage model.
+async function classify(cfg: Config, transcript: string, signal: AbortSignal, timeout: AbortSignal): Promise<Triage> {
+  const prompt = [
+    await Bun.file(triagePromptPath(cfg)).text(),
+    "",
+    "--- TRANSCRIPT ---",
+    transcript.slice(0, TRIAGE_HEAD_CHARS),
+    "",
+    "--- END ---",
+    "",
+  ].join("\n");
+  const res = await fetch(`${cfg.ollamaHost}/api/generate`, {
+    method: "POST",
+    signal: AbortSignal.any([signal, timeout]),
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: cfg.modelSummary, prompt, stream: false, think: false, format: "json", options: { temperature: 0 } }),
+  });
+  if (!res.ok) throw new EngineError(`ollama triage HTTP ${res.status}`, res.status);
+  const { response } = (await res.json()) as { response: string };
+  return parseTriage(response);
+}
+
+export async function summarize(cfg: Config, transcriptPath: string, signal: AbortSignal): Promise<SummarizeResult> {
   const base = pathBasename(transcriptPath, ".txt");
   const transcript = await Bun.file(transcriptPath).text();
 
@@ -31,7 +95,7 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
     log.info("ollama", `transcript ${base} below ${MIN_WORDS} words — marking empty (skipping LLM)`);
     const out = cfg.paths.summary(base);
     await Bun.write(out, EMPTY_MARKER + "\n");
-    return out;
+    return { summaryPath: out, type: "summary", language: "cs" };
   }
 
   // Stage-timeout backstop — created BEFORE preflight so the documented per-stage limit also
@@ -41,8 +105,23 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
 
   await preflight(cfg, signal, timeout);
 
+  // Classify first, then route to the matching template. A triage hiccup degrades to the generic
+  // summary rather than failing the recording; an abort/timeout still propagates.
+  let triage: Triage = { type: "summary", language: "cs" };
+  try {
+    triage = await classify(cfg, transcript, signal, timeout);
+  } catch (err) {
+    if (signal.aborted || isAbort(err)) throw new AbortError("ollama aborted");
+    if (timeout.aborted) throw new EngineError(`ollama timed out after ${cfg.processTimeoutSeconds}s`, 124);
+    log.warn("ollama", `triage failed for ${base}, defaulting to summary: ${String(err)}`);
+  }
+  log.info("ollama", `classified ${base} as ${triage.type} (${triage.language})`);
+
+  const baseRules = (await Bun.file(basePromptPath(cfg)).text())
+    .replaceAll("{{LANGUAGE}}", triage.language === "en" ? "anglicky" : "česky");
   const prompt = [
-    await Bun.file(cfg.promptFile).text(),
+    baseRules,
+    await Bun.file(typePromptPath(cfg, triage.type)).text(),
     "",
     "--- TRANSCRIPT ---",
     transcript,
@@ -51,7 +130,7 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
     "",
   ].join("\n");
 
-  log.info("ollama", `summarizing ${base} with ${cfg.modelSummary}`);
+  log.info("ollama", `summarizing ${base} (${triage.type}) with ${cfg.modelSummary}`);
   let res: Response;
   try {
     res = await fetch(`${cfg.ollamaHost}/api/generate`, {
@@ -79,7 +158,7 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
 
   const out = cfg.paths.summary(base);
   await Bun.write(out, response);
-  return out;
+  return { summaryPath: out, type: triage.type, language: triage.language };
 }
 
 /** Generate a short meeting title from the finished summary (for the vault filename +

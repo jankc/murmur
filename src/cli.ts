@@ -16,6 +16,7 @@ import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
 import { resolveWav, move } from "./recordings.ts";
 import { runImport } from "./import.ts";
+import { purge } from "./purge.ts";
 import { EngineError } from "./engines/errors.ts";
 import { logFailure } from "./failures.ts";
 import { PauseStore } from "./jobstate.ts";
@@ -90,8 +91,8 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
   try {
     await transcribe(cfg, job, signal);
     stage = "summarize";
-    await summarize(cfg, txt, signal);
-    await archiveSummary(cfg, base, signal).catch((e) => console.error(`archive: ${String(e)}`));
+    const result = await summarize(cfg, txt, signal);
+    await archiveSummary(cfg, base, signal, result).catch((e) => console.error(`archive: ${String(e)}`));
     // Only retire managed recordings (under MEETINGS_BASE) to processed/; an external one-off
     // path has no managed home, and a basename match could move an unrelated recording.
     if (wavPath.startsWith(cfg.meetingsBase)) await move(cfg, base, "processed");
@@ -195,6 +196,7 @@ Usage: murmur <command> [args]
   import                   pull new recordings from external sources (see murmur.toml) into inbox/
   reprocess <name>         re-run the pipeline for one recording (incl. from failed/)
   retry-failed             re-enqueue every recording in recordings/failed/
+  purge [--apply]          find empty/junk recordings & delete all their artifacts (dry-run without --apply)
   transcribe [audio]       transcribe only → prints transcript path
   summarize <transcript>   summarize a transcript → prints summary path
   status [--json] [--watch] recording / pause / queue / failures (--json for tools; --watch [secs] for a live view)
@@ -370,6 +372,13 @@ switch (cmd) {
     break;
   }
 
+  case "purge": {
+    // Find empty/junk recordings (transcript-based) and delete all their artifacts.
+    // Dry-run by default; --apply actually deletes. Never part of the pipeline.
+    await purge(cfg, rest.includes("--apply"));
+    break;
+  }
+
   case "retry-failed": {
     let names: string[];
     try {
@@ -414,9 +423,9 @@ switch (cmd) {
     const txt = (await Bun.file(arg).exists()) ? arg : cfg.paths.transcript(basename(arg, ".txt"));
     if (!(await Bun.file(txt).exists())) die(`transcript not found: ${arg}`);
     const sig = new AbortController().signal;
-    const md = await summarize(cfg, txt, sig);
-    await archiveSummary(cfg, basename(txt, ".txt"), sig).catch((e) => console.error(`archive: ${String(e)}`));
-    console.log(md);
+    const result = await summarize(cfg, txt, sig);
+    await archiveSummary(cfg, basename(txt, ".txt"), sig, result).catch((e) => console.error(`archive: ${String(e)}`));
+    console.log(result.summaryPath);
     break;
   }
 

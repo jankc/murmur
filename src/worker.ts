@@ -90,13 +90,13 @@ export class Worker {
       await transcribe(this.cfg, job, ac.signal);
 
       await writeCurrent(this.cfg, { basename: job.basename, stage: "summarize", startedAt: Date.now() });
-      await summarize(this.cfg, txt, ac.signal);
+      const result = await summarize(this.cfg, txt, ac.signal);
 
       // Copy into the Obsidian vault (no-op if unconfigured). Abort propagates → requeue;
       // a vault error is logged but must not fail a job whose summary is already written locally.
       await writeCurrent(this.cfg, { basename: job.basename, stage: "archive", startedAt: Date.now() });
       try {
-        await archiveSummary(this.cfg, job.basename, ac.signal);
+        await archiveSummary(this.cfg, job.basename, ac.signal, result);
       } catch (err) {
         if (isAbort(err) || ac.signal.aborted) throw err;
         log.warn("worker", `archive failed for ${job.basename}: ${String(err)}`);

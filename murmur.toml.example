@@ -20,8 +20,10 @@ meetings_base = "~/Recordings/Meetings"
 model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.g. gemma4:26b-mlx)
                                    # are custom LOCAL MLX builds, not pullable — `ollama create` them.
 # ollama_host = "http://localhost:11434"   # set if ollama is remote or on a non-default port
-# prompt_file = ""                 # empty = repo prompts/summary.md (which instructs Czech output —
-                                   # point elsewhere to change the summary language/style)
+# prompts_dir = ""                 # empty = repo prompts/ — holds base.md, triage.md and
+                                   # types/<type>.md (summary, dictation, list, journal, lecture).
+                                   # A triage call routes each recording to the matching template;
+                                   # point elsewhere to customize. (Triage reuses [summary].model.)
 
 [asr]
 # model = "mlx-community/whisper-large-v3-turbo"   # mlx-whisper model (hf repo)

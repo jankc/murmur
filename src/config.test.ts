@@ -16,7 +16,7 @@ const HOME = process.env.HOME ?? "";
 // MEETINGS_BASE (etc.) in the dev shell can't make a "toml value wins" assertion flaky.
 const ENV_KEYS = [
   "MEETINGS_BASE", "MODEL_SUMMARY", "MURMUR_PORT", "MURMUR_PYTHON", "ASR_MODEL", "ASR_LANG",
-  "DIARIZE", "DIARIZE_NUM_SPEAKERS", "HF_TOKEN", "OLLAMA_HOST", "PROMPT_FILE", "RECORD_BACKEND",
+  "DIARIZE", "DIARIZE_NUM_SPEAKERS", "HF_TOKEN", "OLLAMA_HOST", "PROMPTS_DIR", "RECORD_BACKEND",
   "RECORD_DEVICE_INDEX", "OWNSCRIBE_BIN", "MAX_DURATION_SECONDS", "PROCESS_TIMEOUT_SECONDS",
   "RECORD_PAN_FILTER", "RECORD_SILENCE_DB", "OBSIDIAN_VAULT", "VAULT_FOLDER",
 ];
@@ -84,7 +84,7 @@ silence_db = -40
       expect(cfg.recordBackend).toBe("ownscribe");
       expect(cfg.silenceDb).toBe(-40); // negative number survives
       expect(cfg.repoDir).toBe(dir);
-      expect(cfg.promptFile).toBe(join(dir, "prompts/summary.md"));
+      expect(cfg.promptsDir).toBe(join(dir, "prompts"));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

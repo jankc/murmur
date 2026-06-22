@@ -23,7 +23,7 @@ export interface Config {
   // ollama (summarization)
   ollamaHost: string;
   modelSummary: string;
-  promptFile: string;
+  promptsDir: string; // dir holding base.md, triage.md, types/<type>.md
   // Obsidian vault archiving (optional — empty vaultRoot disables it)
   vaultRoot: string;
   vaultFolder: string;
@@ -55,7 +55,7 @@ const KEYS = [
   "DIARIZE_NUM_SPEAKERS",
   "HF_TOKEN",
   "OLLAMA_HOST",
-  "PROMPT_FILE",
+  "PROMPTS_DIR",
   "RECORD_BACKEND",
   "RECORD_DEVICE_INDEX",
   "OWNSCRIBE_BIN",
@@ -103,7 +103,7 @@ function tomlToRawEnv(toml: Record<string, any>): RawEnv {
     DIARIZE_NUM_SPEAKERS: asr.num_speakers,
     HF_TOKEN: asr.hf_token,
     OLLAMA_HOST: summary.ollama_host,
-    PROMPT_FILE: path(summary.prompt_file),
+    PROMPTS_DIR: path(summary.prompts_dir),
     RECORD_BACKEND: rec.backend,
     RECORD_DEVICE_INDEX: rec.device_index,
     OWNSCRIBE_BIN: path(rec.ownscribe_bin),
@@ -172,7 +172,7 @@ export function loadConfig(repoDir: string = REPO_DIR): Config {
     hfToken: pick("HF_TOKEN", ""),
     ollamaHost: pick("OLLAMA_HOST", "http://localhost:11434"),
     modelSummary: pick("MODEL_SUMMARY", "gemma4:26b-mlx"),
-    promptFile: pick("PROMPT_FILE", join(repoDir, "prompts/summary.md")),
+    promptsDir: pick("PROMPTS_DIR", join(repoDir, "prompts")),
     vaultRoot: pick("OBSIDIAN_VAULT", ""),
     vaultFolder: pick("VAULT_FOLDER", "Murmur"),
     recordBackend: pickBackend(pick("RECORD_BACKEND", "ffmpeg")),
@@ -206,7 +206,7 @@ export function configAsEnv(cfg: Config): Record<string, string> {
     DIARIZE_NUM_SPEAKERS: String(cfg.numSpeakers),
     HF_TOKEN: cfg.hfToken,
     OLLAMA_HOST: cfg.ollamaHost,
-    PROMPT_FILE: cfg.promptFile,
+    PROMPTS_DIR: cfg.promptsDir,
     RECORD_BACKEND: cfg.recordBackend,
     RECORD_DEVICE_INDEX: cfg.recordDeviceIndex,
     OWNSCRIBE_BIN: cfg.ownscribeBin,

@@ -1,6 +1,7 @@
 // Setup/health checks shared by `murmur doctor` (prints a checklist, exits non-zero on a
 // hard failure) and the daemon's startup selfCheck (logs them). One definition so the two
 // can't drift. A check is "error" (the pipeline can't work) or "warn" (degraded/optional).
+import { join } from "node:path";
 import type { Config } from "./config.ts";
 
 export interface Check {
@@ -19,8 +20,15 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
   // The config file is optional (everything has a default), so a missing murmur.toml is a warn.
   const toml = `${cfg.repoDir}/murmur.toml`;
   add("config file", await fileOk(toml), `${toml} — none found, using defaults`, "warn");
-  // PROMPT_FILE is read on every non-trivial summarize — a missing override silently breaks it.
-  add("summary prompt", await fileOk(cfg.promptFile), cfg.promptFile);
+  // The prompts dir is read on every non-trivial summarize (base + triage + the routed type) —
+  // a missing file silently breaks it. Check the required ones.
+  const promptFiles = [
+    join(cfg.promptsDir, "base.md"),
+    join(cfg.promptsDir, "triage.md"),
+    join(cfg.promptsDir, "types", "summary.md"),
+  ];
+  const promptsOk = (await Promise.all(promptFiles.map(fileOk))).every(Boolean);
+  add("summary prompts", promptsOk, cfg.promptsDir);
   add("asr venv python", await fileOk(cfg.pythonBin), cfg.pythonBin);
 
   const ffmpeg = Bun.which("ffmpeg", { PATH: cfg.childPath });

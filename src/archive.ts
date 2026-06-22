@@ -9,14 +9,19 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { Config } from "./config.ts";
-import { generateTitle, EMPTY_MARKER } from "./engines/ollama.ts";
+import { generateTitle, EMPTY_MARKER, type TriageType } from "./engines/ollama.ts";
 import { isAbort } from "./engines/errors.ts";
 import { parseStamp, stampFromDate } from "./stamp.ts";
 import { locate } from "./recordings.ts";
 import { CANONICAL_AUDIO_EXT } from "./paths.ts";
 import { log } from "./log.ts";
 
-export async function archiveSummary(cfg: Config, base: string, signal: AbortSignal): Promise<void> {
+export async function archiveSummary(
+  cfg: Config,
+  base: string,
+  signal: AbortSignal,
+  meta: { type: TriageType; language: "cs" | "en" },
+): Promise<void> {
   if (!cfg.vaultRoot) return; // archiving disabled
   const summaryPath = cfg.paths.summary(base);
   const summaryFile = Bun.file(summaryPath);
@@ -37,7 +42,7 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   // Second precision (HH-MM-SS), so two recordings that start in the same minute get
   // distinct note identities — the dedup below must not delete/overwrite an unrelated note.
   const prefix = `${when.date} ${when.clock}`;
-  // The summary already opens with an LLM-generated title (see prompts/summary.md), so read
+  // The summary already opens with an LLM-generated title (see prompts/base.md), so read
   // it straight from the text — no second model round-trip. Older summaries that predate the
   // title-in-prompt have no leading title and fall back to a dedicated generateTitle() call.
   let title = sanitizeTitle(titleFromSummary(summaryText));
@@ -56,15 +61,20 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
   const sourceName = audioPath ? basename(audioPath) : `${base}${CANONICAL_AUDIO_EXT}`;
   const speakers = await countSpeakers(cfg, base);
   const duration = audioPath ? await durationOf(cfg, audioPath) : null;
+  // Default-bucket recordings keep the historical `meeting` tag so existing vault queries hold;
+  // the special types get their own tag (#dictation/#list/#journal/#lecture).
+  const typeTag = meta.type === "summary" ? "meeting" : meta.type;
   const fm = [
     "---",
     `title: ${yaml(title || prefix)}`,
+    `type: ${meta.type}`,
+    `lang: ${meta.language}`,
     `date: ${when.date}`,
     `time: ${yaml(when.display)}`,
     `source: ${yaml(sourceName)}`,
     ...(duration ? [`duration: ${yaml(duration)}`] : []),
     ...(speakers ? [`speakers: ${speakers}`] : []),
-    "tags: [meeting, murmur]",
+    `tags: [murmur, ${typeTag}]`,
     "---",
     "",
     "",
@@ -87,7 +97,8 @@ export async function archiveSummary(cfg: Config, base: string, signal: AbortSig
 // Headings the summary template itself uses — so the first section of a title-less
 // (older) summary is never mistaken for the meeting title.
 const SECTION_HEADINGS = new Set([
-  "Shrnutí", "Hlavní body", "Rozhodnutí", "Úkoly", "Otevřené otázky",
+  "Shrnutí", "Hlavní body", "Nápady / myšlenky", "Rozhodnutí a dohody", "Rozhodnutí", "Úkoly",
+  "Připomínky", "Otevřené otázky",
   "Technické poznámky", "Technická rozhodnutí", "Rizika / problémy", "Confidence",
 ]);
 

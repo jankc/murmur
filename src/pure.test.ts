@@ -6,7 +6,8 @@ import { parseStamp, stampFromDate, monthOf } from "./stamp.ts";
 import { truthy, parseNum } from "./util.ts";
 import { titleFromSummary, sanitizeTitle } from "./archive.ts";
 import { isRecordingFile, stripAudioExt } from "./paths.ts";
-import { wordCount } from "./engines/ollama.ts";
+import { wordCount, parseTriage } from "./engines/ollama.ts";
+import { classifyTranscript } from "./purge.ts";
 
 describe("stamp", () => {
   test("parseStamp extracts the embedded timestamp", () => {
@@ -122,5 +123,64 @@ describe("wordCount", () => {
 
   test("counts plain spoken words", () => {
     expect(wordCount("jedna dvě tři čtyři pět")).toBe(5);
+  });
+});
+
+describe("parseTriage", () => {
+  test("accepts a valid type + language", () => {
+    expect(parseTriage('{"type":"lecture","language":"en"}')).toEqual({ type: "lecture", language: "en" });
+    expect(parseTriage('{"type":"dictation","language":"cs"}')).toEqual({ type: "dictation", language: "cs" });
+  });
+
+  test("extracts JSON from a ```json code fence (gemma *-mlx wraps it)", () => {
+    expect(parseTriage('```json\n{"type": "lecture", "language": "en"}\n```')).toEqual({ type: "lecture", language: "en" });
+    expect(parseTriage('Here you go:\n{"type":"summary","language":"cs"} hope that helps')).toEqual({ type: "summary", language: "cs" });
+  });
+
+  test("an unknown type falls back to summary (the safe default)", () => {
+    expect(parseTriage('{"type":"podcast","language":"cs"}')).toEqual({ type: "summary", language: "cs" });
+  });
+
+  test("any language other than en is treated as cs", () => {
+    expect(parseTriage('{"type":"list","language":"de"}')).toEqual({ type: "list", language: "cs" });
+    expect(parseTriage('{"type":"journal"}')).toEqual({ type: "journal", language: "cs" });
+  });
+
+  test("garbage or non-JSON falls back to {summary, cs}", () => {
+    expect(parseTriage("not json at all")).toEqual({ type: "summary", language: "cs" });
+    expect(parseTriage("")).toEqual({ type: "summary", language: "cs" });
+  });
+});
+
+describe("classifyTranscript (purge)", () => {
+  test("below the 25-word gate is empty", () => {
+    expect(classifyTranscript("raz dva tři haló").reason).toBe("empty");
+    expect(classifyTranscript("").reason).toBe("empty");
+  });
+
+  test("a summary marked with EMPTY_MARKER is empty regardless of transcript length", () => {
+    const long = Array(60).fill("slovo").join(" "); // 60 words, would otherwise be 'noise'
+    expect(classifyTranscript(long, "Transcript je prázdný nebo testovací — žádné shrnutí.").reason).toBe("empty");
+  });
+
+  test("long repetitive ASR garbage is noise (low unique-word ratio)", () => {
+    expect(classifyTranscript(Array(100).fill("cast").join(" ")).reason).toBe("noise");
+    expect(classifyTranscript("former ".repeat(80)).reason).toBe("noise");
+  });
+
+  test("a normal long transcript is kept", () => {
+    const real =
+      "Musíme se rozhodnout jestli použijeme Postgres nebo SQLite. " +
+      "Honza navrhuje Postgres kvůli replikaci a udělá migraci do pátku. " +
+      "Ještě nevíme jak vyřešíme zálohy a kdo nasadí monitoring na produkci příští týden.";
+    expect(classifyTranscript(real.repeat(2)).reason).toBeNull();
+  });
+
+  test("a genuine varied note above the gate is kept — not flagged as noise", () => {
+    const note =
+      "Dneska jsem byl na obědě s Petrem a probírali jsme nový projekt pro klienta. " +
+      "Říkal že termín je napjatý ale zvládneme to když přidáme jednoho člověka. " +
+      "Musím zítra zavolat účetní kvůli fakturám a taky připravit podklady pro pondělní schůzku s vedením.";
+    expect(classifyTranscript(note).reason).toBeNull();
   });
 });
