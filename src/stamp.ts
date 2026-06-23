@@ -1,6 +1,8 @@
 // Parse the timestamp embedded in a recording basename (meeting-2026-06-18_16-21-05),
 // or derive one from a Date. Shared by the vault archiver (note filename/frontmatter)
 // and the recordings mover (processed/<YYYY-MM>/ partitioning).
+import { pad } from "./util.ts";
+
 export interface Stamp {
   date: string; // YYYY-MM-DD
   time: string; // HH-MM (filename-safe)
@@ -8,8 +10,6 @@ export interface Stamp {
   display: string; // HH:MM (frontmatter)
   month: string; // YYYY-MM (folder)
 }
-
-const pad = (n: number) => String(n).padStart(2, "0");
 
 export function parseStamp(base: string): Stamp | null {
   const m = base.match(/(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/);

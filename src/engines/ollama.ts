@@ -14,13 +14,17 @@ import { AbortError, EngineError, isAbort } from "./errors.ts";
 export const EMPTY_MARKER = "Transcript je prázdný nebo testovací — žádné shrnutí.";
 export const MIN_WORDS = 25;
 
-// Count real spoken words, ignoring diarization markup ([00:00:01.2], [SPEAKER_00]).
-export function wordCount(transcript: string): number {
+// Strip diarization markup ([00:00:01.2] timestamps, [SPEAKER_00] labels) from a transcript,
+// leaving just the spoken text. Shared by wordCount() here and purge's tokenizer.
+export function stripTranscriptMarkup(transcript: string): string {
   return transcript
     .replace(/\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]/g, "")
-    .replace(/\[SPEAKER_\d+\]/g, "")
-    .split(/\s+/)
-    .filter(Boolean).length;
+    .replace(/\[SPEAKER_\d+\]/g, "");
+}
+
+// Count real spoken words, ignoring diarization markup ([00:00:01.2], [SPEAKER_00]).
+export function wordCount(transcript: string): number {
+  return stripTranscriptMarkup(transcript).split(/\s+/).filter(Boolean).length;
 }
 
 // The recording kinds triage routes to. "summary" is the default/fallback (meetings, notes,

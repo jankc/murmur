@@ -14,6 +14,8 @@ import { isAbort } from "./engines/errors.ts";
 import { parseStamp, stampFromDate } from "./stamp.ts";
 import { recordingFileIn } from "./recordings.ts";
 import { ARTIFACTS, CANONICAL_AUDIO_EXT } from "./paths.ts";
+import { probeDurationSeconds } from "./ffprobe.ts";
+import { pad } from "./util.ts";
 import { log } from "./log.ts";
 
 export async function archiveSummary(
@@ -142,24 +144,6 @@ async function durationOf(cfg: Config, audioPath: string): Promise<string | null
   const seconds = await probeDurationSeconds(cfg, audioPath);
   if (seconds === null || !Number.isFinite(seconds) || seconds <= 0) return null;
   const s = Math.round(seconds);
-  const p = (n: number) => String(n).padStart(2, "0");
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
-  return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`;
-}
-
-/** Container duration in seconds via ffprobe, or null on any failure (duration is then just
- *  omitted from the note — a missing-ffprobe/odd-file case must never fail archiving). */
-async function probeDurationSeconds(cfg: Config, file: string): Promise<number | null> {
-  try {
-    const proc = Bun.spawn(
-      ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file],
-      { env: { ...process.env, PATH: cfg.childPath }, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
-    );
-    const out = (await new Response(proc.stdout).text()).trim();
-    if ((await proc.exited) !== 0) return null;
-    const n = Number(out);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
 }

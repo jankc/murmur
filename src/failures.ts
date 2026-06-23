@@ -5,7 +5,7 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Config } from "./config.ts";
 import { notify } from "./notify.ts";
-import { log } from "./log.ts";
+import { log, isoStamp } from "./log.ts";
 
 export async function logFailure(
   cfg: Config,
@@ -14,9 +14,8 @@ export async function logFailure(
   code: number,
   _wavPath: string,
 ): Promise<void> {
-  const ts = new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
   // A copy-pasteable re-run command (no trailing prose); the wav sits in recordings/failed/.
-  const lineText = `[${ts}] ${basename} — ${stage} failed (exit ${code}). Re-run: murmur reprocess "${basename}"\n`;
+  const lineText = `[${isoStamp()}] ${basename} — ${stage} failed (exit ${code}). Re-run: murmur reprocess "${basename}"\n`;
   try {
     await mkdir(dirname(cfg.paths.failureLog), { recursive: true });
     await appendFile(cfg.paths.failureLog, lineText);

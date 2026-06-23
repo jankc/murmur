@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import type { Config } from "../config.ts";
 import type { QueueItem } from "../queue.ts";
 import { artifactsFor } from "../paths.ts";
+import { probeDurationSeconds } from "../ffprobe.ts";
+import { pad } from "../util.ts";
 import { log } from "../log.ts";
 import { AbortError, EngineError, isAbort } from "./errors.ts";
 
@@ -108,18 +110,6 @@ async function ffmpeg(args: string[], cfg: Config, logPath: string, signal: Abor
   }
 }
 
-/** Audio duration in seconds via ffprobe, or null if unreadable. */
-async function probeDuration(cfg: Config, file: string): Promise<number | null> {
-  const proc = Bun.spawn(
-    ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nk=1:nw=1", file],
-    { env: { ...process.env, PATH: cfg.childPath }, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
-  );
-  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  if (code !== 0) return null;
-  const n = Number(out.trim());
-  return Number.isFinite(n) ? n : null;
-}
-
 /** Trim leading + trailing near-silence into a 16 kHz mono temp wav for ASR, returning the head
  *  offset so the caller can re-anchor timestamps. Only the ends are trimmed — internal pauses are
  *  preserved (the `areverse` sandwich), so the timeline (and diarization) stays intact. Any
@@ -138,7 +128,7 @@ async function trimSilence(cfg: Config, src: string, label: string, logPath: str
   const abortIfCancelled = () => { if (signal.aborted) throw new AbortError("asr trim aborted"); };
 
   try {
-    const origDur = await probeDuration(cfg, src);
+    const origDur = await probeDurationSeconds(cfg, src);
     if (origDur === null) {
       log.warn("asr", `${label}: trim skipped — could not probe ${src}`);
       return noop;
@@ -153,7 +143,7 @@ async function trimSilence(cfg: Config, src: string, label: string, logPath: str
       await rmTmp(headTmp);
       return noop;
     }
-    const headDur = await probeDuration(cfg, headTmp);
+    const headDur = await probeDurationSeconds(cfg, headTmp);
     if (headDur === null) { await rmTmp(headTmp); return noop; }
     const offset = Math.max(0, origDur - headDur);
 
@@ -166,7 +156,7 @@ async function trimSilence(cfg: Config, src: string, label: string, logPath: str
       return { path: headTmp, offset, cleanup: () => rmTmp(headTmp) };
     }
     await rmTmp(headTmp);
-    const finalDur = await probeDuration(cfg, finalTmp);
+    const finalDur = await probeDurationSeconds(cfg, finalTmp);
     log.info("asr", `${label}: trimmed silence — head +${offset.toFixed(1)}s, ${origDur.toFixed(0)}s → ${(finalDur ?? 0).toFixed(0)}s`);
     return { path: finalTmp, offset, cleanup: () => rmTmp(finalTmp) };
   } catch (err) {
@@ -252,7 +242,6 @@ async function runAsr(cfg: Config, label: string, wav: string, logPath: string, 
   }
 }
 
-const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 function fmtTimestamp(sec: number): string {
   const s = Math.max(0, sec);
   const h = Math.floor(s / 3600);

@@ -1,13 +1,14 @@
 // Minimal timestamped logger. stdout/stderr are captured by the LaunchAgent into
 // $MEETINGS_BASE/logs/daemon.{out,err}.log. No dependencies.
 
-function ts(): string {
-  // Local time, second precision — matches the format used in process-failures.log.
+/** Timestamp for a log line (UTC, second precision: "YYYY-MM-DD HH:MM:SS").
+ *  Shared with process-failures.log so the two stay in the same format. */
+export function isoStamp(): string {
   return new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
 }
 
 function line(level: string, component: string, msg: string): string {
-  return `[${ts()}] ${level.padEnd(5)} ${component} — ${msg}`;
+  return `[${isoStamp()}] ${level.padEnd(5)} ${component} — ${msg}`;
 }
 
 export const log = {

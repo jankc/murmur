@@ -28,6 +28,7 @@ import { notify } from "./notify.ts";
 import { sleep } from "./util.ts";
 import { log } from "./log.ts";
 import { transcodeToFlac16k } from "./transcode.ts";
+import { stampFromDate } from "./stamp.ts";
 
 export interface Recorder {
   isRecording(): boolean;
@@ -338,8 +339,8 @@ function alive(pid: number): boolean {
 }
 
 function stamp(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  const s = stampFromDate(d); // YYYY-MM-DD_HH-MM-SS — the one timestamp format (see stamp.ts)
+  return `${s.date}_${s.clock}`;
 }
 
 /** Peak volume in dBFS via ffmpeg volumedetect, or null if unreadable. */

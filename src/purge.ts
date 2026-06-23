@@ -6,7 +6,7 @@ import { readdirSync, type Dirent } from "node:fs";
 import { rm, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "./config.ts";
-import { wordCount, EMPTY_MARKER, MIN_WORDS } from "./engines/ollama.ts";
+import { wordCount, stripTranscriptMarkup, EMPTY_MARKER, MIN_WORDS } from "./engines/ollama.ts";
 import { ARTIFACTS } from "./paths.ts";
 import { parseStamp } from "./stamp.ts";
 import { log } from "./log.ts";
@@ -28,9 +28,7 @@ const NOISE_RATIO = 0.18;
 /** Tokenize the way wordCount does (drop [HH:MM:SS] / [SPEAKER_NN] markup), then strip
  *  punctuation and lowercase so "cast," and "cast" count as one token. */
 function tokens(transcript: string): string[] {
-  return transcript
-    .replace(/\[\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]/g, "")
-    .replace(/\[SPEAKER_\d+\]/g, "")
+  return stripTranscriptMarkup(transcript)
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .toLowerCase()
     .split(/\s+/)
@@ -116,8 +114,10 @@ export async function scanPurge(cfg: Config): Promise<PurgeItem[]> {
   for (const { base, folder } of folders) {
     const transcriptPath = join(folder, ARTIFACTS.transcript);
     if (!(await Bun.file(transcriptPath).exists())) continue; // not yet transcribed → not junk
-    const transcript = await Bun.file(transcriptPath).text().catch(() => "");
-    const summaryText = await Bun.file(join(folder, ARTIFACTS.summary)).text().catch(() => "");
+    const [transcript, summaryText] = await Promise.all([
+      Bun.file(transcriptPath).text().catch(() => ""),
+      Bun.file(join(folder, ARTIFACTS.summary)).text().catch(() => ""),
+    ]);
     const c = classifyTranscript(transcript, summaryText);
     if (!c.reason) continue;
     items.push({ base, reason: c.reason, words: c.words, uniqueRatio: c.uniqueRatio, folder, vaultNotes: vaultNotesFor(cfg, base) });

@@ -13,17 +13,17 @@ import { runChecks } from "./health.ts";
 import { log } from "./log.ts";
 
 export async function runDaemon(cfg: Config): Promise<void> {
-  // 1. Ensure the directory layout exists.
-  for (const dir of [
-    cfg.paths.partialDir,
-    cfg.paths.inboxDir,
-    cfg.paths.processedDir,
-    cfg.paths.failedDir,
-    cfg.paths.logsDir,
-    cfg.paths.stateDir,
-  ]) {
-    await mkdir(dir, { recursive: true });
-  }
+  // 1. Ensure the directory layout exists (independent dirs → create them concurrently).
+  await Promise.all(
+    [
+      cfg.paths.partialDir,
+      cfg.paths.inboxDir,
+      cfg.paths.processedDir,
+      cfg.paths.failedDir,
+      cfg.paths.logsDir,
+      cfg.paths.stateDir,
+    ].map((dir) => mkdir(dir, { recursive: true })),
+  );
 
   // 2. Single-instance lock (LaunchAgent KeepAlive + a manual run could otherwise double-run).
   if (!acquirePidLock(cfg.paths.lockFile)) {

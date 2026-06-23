@@ -13,3 +13,7 @@ export const parseNum = (raw: string, fallback: number): number => {
   const n = Number(raw);
   return Number.isFinite(n) ? n : fallback;
 };
+
+/** Zero-pad a number to `width` digits (default 2) — the shared formatter for timestamps,
+ *  durations, and clock components across stamp/recorder/archive/asr. */
+export const pad = (n: number, width = 2): string => String(n).padStart(width, "0");
