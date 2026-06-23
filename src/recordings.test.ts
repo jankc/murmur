@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildPaths } from "./paths.ts";
-import { locate, resolveWav, move, recordingFileIn } from "./recordings.ts";
+import { locate, resolveWav, move, recordingFileIn, recordingBase, isManagedRecording } from "./recordings.ts";
 import type { Config } from "./config.ts";
 
 let base: string;
@@ -95,6 +95,23 @@ describe("move", () => {
     expect(existsSync(join(folder, "recording.flac"))).toBe(true);
   });
 
+  test("replaces a stale folder already in the terminal home (reprocess overwrites)", async () => {
+    // A prior processed run sits in the terminal home...
+    const home = join(cfg.paths.processedDir, "2026-06", STAMP);
+    mkdirSync(home, { recursive: true });
+    await Bun.write(join(home, "recording.flac"), "STALE");
+    await Bun.write(join(home, "summary.md"), "old summary");
+    // ...and a fresh re-drop with new content is processed in inbox/.
+    await makeRecording(cfg.paths.inboxDir, STAMP);
+    await Bun.write(join(cfg.paths.inboxDir, STAMP, "summary.md"), "new summary");
+
+    const dest = await move(cfg, STAMP, "processed");
+    expect(dest).toBe(home);
+    expect(await Bun.file(join(home, "recording.flac")).text()).toBe("audio-bytes"); // fresh wins
+    expect(await Bun.file(join(home, "summary.md")).text()).toBe("new summary");
+    expect(existsSync(join(cfg.paths.inboxDir, STAMP))).toBe(false); // source consumed, not stranded
+  });
+
   test("moves to failed", async () => {
     await makeRecording(cfg.paths.inboxDir, STAMP);
     const dest = await move(cfg, STAMP, "failed");
@@ -104,5 +121,40 @@ describe("move", () => {
 
   test("returns null when there's nothing to move", async () => {
     expect(await move(cfg, "meeting-nope", "processed")).toBeNull();
+  });
+});
+
+describe("recordingBase / isManagedRecording", () => {
+  test("managed lifecycle recordings key on the folder name", () => {
+    const inbox = join(cfg.paths.inboxDir, "meeting-x", "recording.flac");
+    expect(recordingBase(cfg, inbox)).toBe("meeting-x");
+    expect(isManagedRecording(cfg, inbox)).toBe(true);
+
+    const processed = join(cfg.paths.processedDir, "2026-06", "meeting-y", "recording.m4a");
+    expect(recordingBase(cfg, processed)).toBe("meeting-y");
+    expect(isManagedRecording(cfg, processed)).toBe(true);
+
+    const failed = join(cfg.paths.failedDir, "meeting-z", "recording.wav");
+    expect(recordingBase(cfg, failed)).toBe("meeting-z");
+    expect(isManagedRecording(cfg, failed)).toBe(true);
+  });
+
+  test("external one-off paths key on the filename stem and are not managed", () => {
+    expect(recordingBase(cfg, "/tmp/somewhere/audio.m4a")).toBe("audio");
+    expect(isManagedRecording(cfg, "/tmp/somewhere/audio.m4a")).toBe(false);
+  });
+
+  test("an external file literally named recording.<ext> is NOT treated as a folder artifact", () => {
+    const external = "/tmp/somewhere/recording.wav"; // outside the store
+    expect(recordingBase(cfg, external)).toBe("recording");
+    expect(isManagedRecording(cfg, external)).toBe(false);
+  });
+
+  test("a recording-shaped path under a …-backup sibling is not managed (no prefix-match trap)", () => {
+    // Mirrors the store's layout exactly but lives under "<base>-backup" — a plain startsWith()
+    // guard would wrongly accept it; the location check rejects it.
+    const lookalike = join(`${base}-backup`, "recordings", "inbox", "meeting-x", "recording.flac");
+    expect(isManagedRecording(cfg, lookalike)).toBe(false);
+    expect(recordingBase(cfg, lookalike)).toBe("recording"); // falls back to stem, not "meeting-x"
   });
 });

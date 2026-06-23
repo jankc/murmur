@@ -7,14 +7,14 @@ import { basename, dirname, join } from "node:path";
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { userInfo } from "node:os";
 import { loadConfig, configAsEnv, type Config } from "./config.ts";
-import { artifactsFor, isRecordingFile, stripAudioExt } from "./paths.ts";
+import { artifactsFor, isRecordingFile } from "./paths.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/asr.ts";
 import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
-import { resolveWav, recordingFileIn, move } from "./recordings.ts";
+import { resolveWav, recordingFileIn, recordingBase, isManagedRecording, move } from "./recordings.ts";
 import { runImport } from "./import.ts";
 import { purge } from "./purge.ts";
 import { EngineError } from "./engines/errors.ts";
@@ -49,13 +49,6 @@ async function fetchStatus(cfg: Config): Promise<StatusSnapshot & { daemon: stri
   return { daemon: up ? "running" : "offline", ...base };
 }
 
-/** The recording's base (folder) name for a recording file: the folder name for a managed
- *  `<base>/recording.<ext>`, or the filename stem for an external one-off path. */
-function baseOf(wavPath: string): string {
-  const stem = stripAudioExt(basename(wavPath));
-  return stem === "recording" ? basename(dirname(wavPath)) : stem;
-}
-
 function flag(name: string): string | undefined {
   const i = rest.indexOf(name);
   return i >= 0 ? rest[i + 1] : undefined;
@@ -88,7 +81,8 @@ function newestRecording(cfg: Config): string | null {
 }
 
 async function runInline(wavPath: string): Promise<{ txt: string; md: string }> {
-  const base = baseOf(wavPath);
+  const base = recordingBase(cfg, wavPath);
+  const managed = isManagedRecording(cfg, wavPath);
   const job: QueueItem = { basename: base, wavPath, enqueuedAt: 0, attempts: 0 };
   const signal = new AbortController().signal;
   // Process unconditionally, overwriting any prior outputs — same as the daemon worker. Every
@@ -100,17 +94,17 @@ async function runInline(wavPath: string): Promise<{ txt: string; md: string }> 
     stage = "summarize";
     const result = await summarize(cfg, txt, signal);
     await archiveSummary(cfg, folder, base, signal, result).catch((e) => console.error(`archive: ${String(e)}`));
-    // Only retire managed recordings (under MEETINGS_BASE) to processed/; an external one-off
-    // path has no managed home, and a basename match could move an unrelated recording.
-    if (wavPath.startsWith(cfg.meetingsBase)) await move(cfg, base, "processed");
+    // Only retire managed recordings (in a lifecycle folder) to processed/; move() resolves by
+    // basename, so for an external one-off path that would risk relocating an unrelated recording
+    // whose basename happens to match.
+    if (managed) await move(cfg, base, "processed");
     return { txt, md };
   } catch (err) {
     const code = err instanceof EngineError ? err.exitCode : 1;
-    // Only managed recordings (under MEETINGS_BASE) have a failed/ home. move()/logFailure
-    // resolve by basename, so an external one-off path (`murmur process /some/file.wav`) is
-    // left alone — otherwise a managed recording that happens to share its basename could be
-    // moved to failed/ instead.
-    if (wavPath.startsWith(cfg.meetingsBase)) {
+    // Only managed recordings have a failed/ home; an external one-off path (`murmur process
+    // /some/file.wav`) is left where it is — move()/logFailure resolve by basename and could
+    // otherwise misfile a managed recording that shares the basename.
+    if (managed) {
       await logFailure(cfg, base, stage, code, wavPath);
       await move(cfg, base, "failed");
     }
@@ -546,7 +540,7 @@ switch (cmd) {
     const arg = positional() ?? newestRecording(cfg) ?? "";
     const wav = (await resolveWav(cfg, arg)) ?? (arg && (await Bun.file(arg).exists()) ? arg : null);
     if (!wav) die(`recording not found: ${arg || "(none)"}`);
-    const base = baseOf(wav);
+    const base = recordingBase(cfg, wav);
     const { transcript: txt } = artifactsFor(wav);
     await transcribe(cfg, { basename: base, wavPath: wav, enqueuedAt: 0, attempts: 0 }, new AbortController().signal);
     console.log(txt);

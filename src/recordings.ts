@@ -53,6 +53,34 @@ export async function recordingFileIn(folder: string): Promise<string | null> {
   return null;
 }
 
+/** If `recordingFile` is a managed recording — a `recording.<ext>` directly inside a lifecycle
+ *  folder (`<inbox|failed|processed/<month>>/<base>/`) — return its `<base>` folder name, else null
+ *  (an external one-off path). This is LOCATION-based, not name-based, so a file literally named
+ *  `recording.wav` that lives outside the store is correctly treated as external. */
+function managedFolderOf(cfg: Config, recordingFile: string): string | null {
+  const parent = dirname(recordingFile); // <base>/
+  const grandparent = dirname(parent); // the lifecycle dir
+  const managed =
+    grandparent === cfg.paths.inboxDir ||
+    grandparent === cfg.paths.failedDir ||
+    dirname(grandparent) === cfg.paths.processedDir; // processed/<month>/<base>/recording.<ext>
+  return managed ? pathBasename(parent) : null;
+}
+
+/** The recording's key (folder name) for a recording file: the `<base>` folder for a managed
+ *  recording, otherwise the filename stem (an external one-off path). Use this — never
+ *  `basename(dirname(...))` — so external paths and files named `recording.<ext>` key correctly. */
+export function recordingBase(cfg: Config, recordingFile: string): string {
+  return managedFolderOf(cfg, recordingFile) ?? stripAudioExt(pathBasename(recordingFile));
+}
+
+/** True when `recordingFile` is a managed recording under the lifecycle dirs — i.e. it's safe to
+ *  resolve it by basename via `locate`/`move`/`logFailure`. False for an external one-off path
+ *  (which must not be moved/relocated by a basename that could collide with a managed recording). */
+export function isManagedRecording(cfg: Config, recordingFile: string): boolean {
+  return managedFolderOf(cfg, recordingFile) !== null;
+}
+
 /** Resolve an /enqueue or CLI argument (absolute path, cwd-relative path, or bare basename) to an
  *  existing recording file. An absolute/cwd path is returned as-is if it exists; otherwise the
  *  argument is treated as a basename and resolved to the `recording.<ext>` inside its located
@@ -80,14 +108,30 @@ export async function move(cfg: Config, base: string, to: "processed" | "failed"
   if (src === dest) return dest; // already in its terminal home
   try {
     await mkdir(dirname(dest), { recursive: true });
+    // Reprocessing re-drops a recording into inbox/ even when a prior run already sits in its
+    // terminal home; replace that stale folder so the fresh artifacts win. (The flat model got
+    // this for free — rename() overwrote the file.) A directory rename onto a non-empty dir would
+    // otherwise fail and strand the folder in inbox/ for an endless reprocess loop. rm is a no-op
+    // when dest is absent (the common case).
+    await rm(dest, { recursive: true, force: true });
     try {
       await rename(src, dest); // atomic within the same filesystem
     } catch (err) {
-      // Cross-device rename (MEETINGS_BASE spanning filesystems): fall back to a recursive
-      // copy + remove. Rare — the lifecycle dirs all live under recordingsDir (one fs).
+      // Cross-device rename (MEETINGS_BASE spanning filesystems): copy into a temp on the dest fs,
+      // atomically swap it in, then drop the source — so a failed copy never leaves a partial dest
+      // under a live lifecycle path, and src stays intact until the copy is fully in place. Rare:
+      // the lifecycle dirs normally all live under recordingsDir (one fs).
       if ((err as NodeJS.ErrnoException)?.code !== "EXDEV") throw err;
-      await cp(src, dest, { recursive: true });
-      await rm(src, { recursive: true, force: true });
+      const tmp = `${dest}.copying-${process.pid}`;
+      await rm(tmp, { recursive: true, force: true });
+      try {
+        await cp(src, tmp, { recursive: true });
+        await rename(tmp, dest);
+        await rm(src, { recursive: true, force: true });
+      } catch (err2) {
+        await rm(tmp, { recursive: true, force: true }).catch(() => {});
+        throw err2;
+      }
     }
     log.info("recordings", `moved ${base} → ${to}`);
     return dest;

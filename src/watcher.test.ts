@@ -27,13 +27,15 @@ async function makeRecording(name: string, ext = ".flac"): Promise<string> {
   return join(folder, `recording${ext}`);
 }
 
-/** Start the watcher, collect onStable calls until `want` of them arrive (or timeout), then close. */
+/** Start the watcher, collect onStable calls until `want` of them arrive (or timeout), then close.
+ *  Reconcile now routes through the size-stability debounce (~3s), so allow a generous budget;
+ *  the poll returns as soon as `want` callbacks land. */
 async function collectReconcile(want: number): Promise<string[]> {
   const seen: string[] = [];
   let handle: WatcherHandle | null = null;
   try {
     handle = startWatcher(cfg, (wav) => seen.push(wav));
-    for (let i = 0; i < 80 && seen.length < want; i++) await sleep(25);
+    for (let i = 0; i < 400 && seen.length < want; i++) await sleep(25); // up to ~10s
   } finally {
     handle?.close();
   }
@@ -45,13 +47,12 @@ describe("watcher boot reconcile", () => {
     const a = await makeRecording("meeting-1");
     const b = await makeRecording("meeting-2", ".m4a");
     expect(await collectReconcile(2)).toEqual([a, b].sort());
-  });
+  }, 15000);
 
   test("ignores a folder with no recording file", async () => {
     mkdirSync(join(cfg.paths.inboxDir, "not-a-recording"), { recursive: true });
     const a = await makeRecording("meeting-1");
-    // Give the reconcile time; only the real recording should be enqueued.
-    const seen = await collectReconcile(1);
-    expect(seen).toEqual([a]);
-  });
+    // Only the real recording should be enqueued (the empty folder is never scheduled).
+    expect(await collectReconcile(1)).toEqual([a]);
+  }, 15000);
 });

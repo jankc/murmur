@@ -17,23 +17,28 @@ export interface WatcherHandle {
 }
 
 export function startWatcher(cfg: Config, onStable: (wav: string) => void): WatcherHandle {
-  void reconcile(cfg, onStable);
-
   const pending = new Map<string, ReturnType<typeof setTimeout>>();
-  const watcher = watch(cfg.paths.inboxDir, { persistent: true }, (_event, fname) => {
-    if (!fname) return;
-    // The immediate child of inbox/ is the recording FOLDER. fs.watch may hand us the folder
-    // name directly, or a path inside it — either way the first segment is the folder. Skip
-    // dotfiles / staging leftovers (a stray .tmp etc. is never a recording folder).
-    const top = fname.toString().split("/")[0];
-    if (!top || top.startsWith(".")) return;
-    const folder = join(cfg.paths.inboxDir, top);
+  // Debounce a folder, then verify its recording.<ext> is size-stable before enqueuing. Shared by
+  // the live watch AND the boot reconcile, so neither path can enqueue a still-being-written file.
+  const schedule = (folder: string) => {
     const existing = pending.get(folder);
     if (existing) clearTimeout(existing);
-    pending.set(
-      folder,
-      setTimeout(() => void debounceStable(folder, pending, onStable), 1000),
-    );
+    pending.set(folder, setTimeout(() => void debounceStable(folder, pending, onStable), 1000));
+  };
+
+  void reconcile(cfg, schedule);
+
+  // recursive: a hand-dropped folder may be created first and its recording.<ext> written later;
+  // recursive watching delivers that inner-file event (as "<base>/recording.<ext>"), so a slow
+  // copy re-arms the debounce instead of being missed. Our own producers publish atomically (whole
+  // folder renamed in), so for them the folder is complete on the first event regardless.
+  const watcher = watch(cfg.paths.inboxDir, { persistent: true, recursive: true }, (_event, fname) => {
+    if (!fname) return;
+    // The first path segment under inbox/ is the recording FOLDER (fs.watch may hand us the folder
+    // name or a path inside it). Skip dotfiles / staging leftovers (never a recording folder).
+    const top = fname.toString().split("/")[0];
+    if (!top || top.startsWith(".")) return;
+    schedule(join(cfg.paths.inboxDir, top));
   });
   log.info("watcher", `watching ${cfg.paths.inboxDir}`);
   return { close: () => watcher.close() };
@@ -73,15 +78,17 @@ async function debounceStable(
 // On boot, scan only inbox/ for recording folders — processed/ recordings are done by definition
 // (the folder IS the state), so they're never re-examined. This is the whole point of the move
 // model, and it rebuilds the work-list (incl. after a layout migration) from the actual inbox.
-async function reconcile(cfg: Config, onStable: (wav: string) => void): Promise<void> {
+// Each folder goes through the same `schedule` (debounce + size-stability) as a live event, so a
+// folder still being copied when the daemon boots is not enqueued until it stops growing.
+async function reconcile(cfg: Config, schedule: (folder: string) => void): Promise<void> {
   try {
     const entries = await readdir(cfg.paths.inboxDir, { withFileTypes: true });
     const folders = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
     let found = 0;
     for (const e of folders) {
-      const rec = await recordingFileIn(join(cfg.paths.inboxDir, e.name));
-      if (rec) {
-        onStable(rec);
+      const folder = join(cfg.paths.inboxDir, e.name);
+      if (await recordingFileIn(folder)) {
+        schedule(folder);
         found++;
       }
     }
