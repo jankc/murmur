@@ -35,7 +35,26 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
   add("ffmpeg", !!ffmpeg, ffmpeg ?? "not on PATH");
 
   if (cfg.recordBackend === "ownscribe") {
-    add("ownscribe-audio", await fileOk(cfg.ownscribeBin), cfg.ownscribeBin);
+    const binExists = await fileOk(cfg.ownscribeBin);
+    add("ownscribe-audio", binExists, cfg.ownscribeBin);
+    if (binExists) {
+      // The capture self-disclaims to become its own TCC responsible process (capture/README.md),
+      // so it holds its OWN Microphone + Screen Recording grants — and those persist across rebuilds
+      // only while the binary keeps a stable code identity. An ad-hoc signature (e.g. the stable
+      // `murmur-ownscribe-codesign` cert went missing) silently resets the grants on the next
+      // rebuild, so menubar (SwiftBar) recordings lose the mic. Flag it before that bites.
+      const stable = await hasStableSignature(cfg.ownscribeBin, cfg.childPath);
+      add("ownscribe-audio signature", stable,
+        stable ? "stable identity — TCC grants survive rebuilds"
+               : "ad-hoc — menubar recordings lose mic/screen grants on the next rebuild; sign with the stable cert (capture/README.md)",
+        "warn");
+      // Best-effort grant check: silent (null → skipped) if the TCC db can't be read.
+      const home = process.env.HOME ?? "";
+      const mic = await tccAllowed(join(home, "Library/Application Support/com.apple.TCC/TCC.db"), "kTCCServiceMicrophone", cfg.ownscribeBin);
+      if (mic !== null) add("ownscribe-audio microphone", mic, mic ? "granted" : "not granted — run `murmur grant-mic`", "warn");
+      const screen = await tccAllowed("/Library/Application Support/com.apple.TCC/TCC.db", "kTCCServiceScreenCapture", cfg.ownscribeBin);
+      if (screen !== null) add("ownscribe-audio screen recording", screen, screen ? "granted" : "not granted — enable ownscribe-audio in System Settings → Screen Recording", "warn");
+    }
   }
 
   const ollamaUp = await fetch(`${cfg.ollamaHost}/api/tags`, { signal: AbortSignal.timeout(2000) })
@@ -61,4 +80,37 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
   add("terminal-notifier", !!tn, tn ?? "not installed — notifications are silently skipped", "warn");
 
   return checks;
+}
+
+/** True if the Mach-O has a STABLE (certificate-based) designated requirement, so its TCC grants
+ *  survive rebuilds. An ad-hoc / cdhash-pinned signature changes every build and resets the grants. */
+async function hasStableSignature(bin: string, childPath: string): Promise<boolean> {
+  try {
+    const p = Bun.spawn(["codesign", "-d", "--requirements", "-", bin],
+      { env: { ...process.env, PATH: childPath }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const out = (await new Response(p.stdout).text()) + (await new Response(p.stderr).text());
+    await p.exited;
+    return /certificate leaf/.test(out); // cert-based DR (vs "cdhash"/adhoc) → stable across rebuilds
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort TCC lookup: is `binPath` (or the binary's bundle id) allowed for `service`? Returns
+ *  null when the database can't be read (sqlite3 missing, unreadable db, …) so the caller skips the
+ *  check rather than false-alarm. macOS-only; only reached for the ownscribe backend. */
+async function tccAllowed(db: string, service: string, binPath: string): Promise<boolean | null> {
+  try {
+    if (!(await Bun.file(db).exists())) return null;
+    const esc = binPath.replace(/'/g, "''");
+    // Match either the path-keyed entry (ad-hoc/unsigned) or the bundle-id entry (signed binary).
+    const q = `SELECT MAX(auth_value) FROM access WHERE service='${service}' AND (client='${esc}' OR client='com.jank.murmur.ownscribe-audio');`;
+    const p = Bun.spawn(["sqlite3", db, q], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+    const out = (await new Response(p.stdout).text()).trim();
+    await p.exited;
+    if (p.exitCode !== 0) return null;
+    return out !== "" && Number(out) >= 2; // empty = no row, 0 = denied, 2 = allowed
+  } catch {
+    return null;
+  }
 }

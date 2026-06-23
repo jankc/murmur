@@ -770,6 +770,64 @@ func printUsage() {
     """, stderr)
 }
 
+// MARK: - Self-disclaim (LOCAL PATCH vs upstream — see capture/README.md)
+//
+// macOS attributes a child process's microphone request to its "responsible" app. A capture
+// launched from the SwiftBar menubar resolves (verified via `launchctl procinfo`) to SwiftBar.app,
+// which has no NSMicrophoneUsageDescription and no mic grant — so the request is silently denied
+// and the mic records SILENCE. `responsibility_spawnattrs_setdisclaim` (an undocumented but stable
+// posix_spawn SPI; LLDB and Qt rely on it) makes a spawned process its OWN responsible process, so
+// the mic request is judged against THIS binary — which carries the usage string (Info.plist) — and
+// can therefore prompt and hold its own grant regardless of launcher.
+//
+// The launcher can't set the attribute (Bun.spawn doesn't expose it), so the binary re-execs ITSELF
+// once, disclaimed; the original process stays as a thin supervisor that forwards the recorder's
+// stop signals (SIGINT/SIGTERM) and the mute toggle (SIGUSR1) to the disclaimed child — preserving
+// the recorder's pid-tracking and SIGINT-merge-on-stop. Only the mic-touching subcommands need it.
+
+private let kDisclaimEnvVar = "OWNSCRIBE_DISCLAIMED"
+private var gDisclaimedChildPid: pid_t = 0
+
+/// Re-exec this process disclaimed (its own TCC responsible process), then supervise it.
+/// Never returns — the supervisor exits with the child's status.
+private func reExecDisclaimed() -> Never {
+    var exeBuf = [CChar](repeating: 0, count: 4096)
+    var size = UInt32(exeBuf.count)
+    let exe = _NSGetExecutablePath(&exeBuf, &size) == 0 ? String(cString: exeBuf) : CommandLine.arguments[0]
+
+    var argv: [UnsafeMutablePointer<CChar>?] = CommandLine.arguments.map { strdup($0) }
+    argv.append(nil)
+    var envStrings = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
+    envStrings.append("\(kDisclaimEnvVar)=1")
+    var envp: [UnsafeMutablePointer<CChar>?] = envStrings.map { strdup($0) }
+    envp.append(nil)
+
+    var attr: posix_spawnattr_t?
+    posix_spawnattr_init(&attr)
+    if let handle = dlopen(nil, RTLD_LAZY), let sym = dlsym(handle, "responsibility_spawnattrs_setdisclaim") {
+        typealias DisclaimFn = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
+        _ = unsafeBitCast(sym, to: DisclaimFn.self)(&attr, 1)
+    } else {
+        fputs("warning: responsibility_spawnattrs_setdisclaim unavailable — mic prompt may be misattributed\n", stderr)
+    }
+
+    var pid: pid_t = 0
+    let rc = posix_spawn(&pid, exe, nil, &attr, argv, envp)
+    posix_spawnattr_destroy(&attr)
+    if rc != 0 {
+        fputs("error: could not re-spawn disclaimed (\(rc)) — recording mic may be silent\n", stderr)
+        exit(1)
+    }
+    gDisclaimedChildPid = pid
+    // Forward stop/mute signals to the disclaimed child (non-capturing closure → C handler).
+    let forward: @convention(c) (Int32) -> Void = { s in if gDisclaimedChildPid > 0 { kill(gDisclaimedChildPid, s) } }
+    for sig in [SIGINT, SIGTERM, SIGUSR1] { signal(sig, forward) }
+
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+    exit((status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f))
+}
+
 func main() {
     let args = CommandLine.arguments
     guard args.count >= 2 else {
@@ -778,6 +836,13 @@ func main() {
     }
 
     let command = args[1]
+
+    // [LOCAL PATCH] The mic-touching subcommands must own their TCC attribution: re-exec disclaimed
+    // once so the microphone request is judged against this binary, not the launcher (e.g. SwiftBar).
+    if (command == "capture" || command == "request-mic"),
+       ProcessInfo.processInfo.environment[kDisclaimEnvVar] == nil {
+        reExecDisclaimed()
+    }
 
     switch command {
     case "list-apps":

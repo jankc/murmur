@@ -20,26 +20,38 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
 - **Pinned commit:** see [`UPSTREAM`](UPSTREAM) — the single source of truth, updated by the sync tooling below
 - **License:** MIT, © 2026 Pascal Berrang — see `LICENSE` (kept per the MIT terms)
 
-`Sources/AudioCapture.swift` tracks upstream with **two local patches** (search the file for
+`Sources/AudioCapture.swift` tracks upstream with **three local patches** (search the file for
 `LOCAL PATCH`):
 
 1. A `--max-duration N` flag (a one-shot timer that fires the normal merge+exit), so a
    `murmur record` capture self-caps like the ffmpeg backend without depending on the daemon.
-2. A `request-mic` subcommand that triggers the microphone TCC prompt and exits. macOS will
-   only *show* a mic prompt for a process that declares `NSMicrophoneUsageDescription`, and
-   only attribute it to the launching app when the request is **not** detached. The recorder
-   detaches the long-lived capture (`proc.unref()`), so a launcher that lacks the grant (e.g.
-   the SwiftBar menubar) silently records a **silent mic**. `murmur grant-mic` runs this
-   subcommand synchronously in the launcher's own process so the prompt appears and the app
-   can be authorized once. See [`Info.plist`](Info.plist).
+2. A `request-mic` subcommand that triggers the microphone TCC prompt and exits (used by
+   `murmur grant-mic`). macOS only *shows* a mic prompt for a process that declares
+   `NSMicrophoneUsageDescription` (embedded — see [`Info.plist`](Info.plist)).
+3. **Self-disclaim** of the mic-touching subcommands (`capture`, `request-mic`). macOS attributes
+   a child's mic/screen request to its *responsible* GUI app. Launched from the SwiftBar menubar
+   that resolves to SwiftBar.app — which has **no** `NSMicrophoneUsageDescription` and no mic
+   grant — so the request is silently denied and the mic records **silence** (verified via
+   `launchctl procinfo`). Using the `responsibility_spawnattrs_setdisclaim` SPI, the binary
+   re-execs itself once as its **own** responsible process, so the request is judged against *this
+   binary* (which has the usage string) — letting it prompt and hold its **own** Microphone +
+   Screen Recording grants, independent of the launcher. The original process stays as a thin
+   supervisor that forwards stop/mute signals (SIGINT/SIGTERM/SIGUSR1) so the recorder's
+   pid-tracking and SIGINT-merge-on-stop are unaffected.
 
-`build.sh` deviates from upstream `swift/build.sh` in two ways: `BIN_DIR` → `capture/bin/`
-(gitignored, so the artifact lands next to its source), and it embeds [`Info.plist`](Info.plist)
-into the binary via `-sectcreate __TEXT __info_plist` then re-signs ad-hoc — without that
-embedded `NSMicrophoneUsageDescription`, the mic prompt can never be shown (patch 2 above).
-Upstream's `Package.swift` is **not** vendored: it under-links frameworks (only CoreAudio +
-AudioToolbox) and `swift build` fails — `build.sh`'s direct `swiftc` call is the real,
-supported build path.
+Because the disclaimed binary is self-responsible, it needs its **own** TCC grants (not the
+launcher's): grant once via **`murmur grant-mic`** (Microphone) and by enabling `ownscribe-audio`
+under **System Settings ▸ Privacy ▸ Screen Recording**.
+
+`build.sh` deviates from upstream `swift/build.sh` in three ways: `BIN_DIR` → `capture/bin/`
+(gitignored, so the artifact lands next to its source); it embeds [`Info.plist`](Info.plist) into
+the binary via `-sectcreate __TEXT __info_plist`; and it **code-signs** — with the stable
+self-signed identity `murmur-ownscribe-codesign` when present (so the binary's code identity, and
+therefore its TCC grants, survive rebuilds), else ad-hoc (grants reset on every rebuild). Create
+the identity once in Keychain Access (Certificate Assistant → *Create a Certificate*, type *Code
+Signing*) or override the name with `OWNSCRIBE_CODESIGN_IDENTITY`. Upstream's `Package.swift` is
+**not** vendored: it under-links frameworks (only CoreAudio + AudioToolbox) and `swift build`
+fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
 
 ## Keeping in sync
 
@@ -52,12 +64,14 @@ supported build path.
   and opens an issue when upstream moves past the pinned commit. Delete it if unwanted.
 
 `LICENSE` tracks upstream verbatim. `Sources/AudioCapture.swift` carries the local
-`--max-duration` and `request-mic` patches and `build.sh` deviates on `BIN_DIR` + the
-`Info.plist` embedding, so after a sync **re-apply the patches** (search `LOCAL PATCH`);
-`scripts/sync-capture.sh` warns about this on `--apply`. If the `--max-duration` patch is ever
-lost, `murmur record` fails loudly with `Unknown option: --max-duration` rather than silently
-dropping the cap; if the `Info.plist`/`request-mic` patch is lost, menubar-launched recordings
-silently lose the mic again.
+`--max-duration`, `request-mic`, and self-disclaim patches and `build.sh` deviates on `BIN_DIR` +
+the `Info.plist` embedding + stable code-signing, so after a sync **re-apply the patches** (search
+`LOCAL PATCH`); `scripts/sync-capture.sh` warns about this on `--apply`. If the `--max-duration`
+patch is ever lost, `murmur record` fails loudly with `Unknown option: --max-duration` rather than
+silently dropping the cap; if the `request-mic`/self-disclaim patch is lost, menubar-launched
+recordings silently lose the mic again. The stable code-signing means a rebuild does **not** reset
+the Microphone/Screen Recording grants — but only while the `murmur-ownscribe-codesign` identity
+stays in your keychain; lose it and the build falls back to ad-hoc and the grants reset.
 
 After any sync, redeploy the binary: `cp capture/bin/ownscribe-audio ~/.local/bin/`.
 
