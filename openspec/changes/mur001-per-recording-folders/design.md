@@ -20,7 +20,7 @@ invariants. It is the storage foundation that mur002 (per-recording summary cont
 - One folder per recording (`<base>/`) holding `recording.<ext>`, `transcript.txt`, `summary.md`,
   `asr.log`; the folder is the unit that moves through the lifecycle.
 - Folder-based `locate`/`move`/`resolveWav`, preserving idempotent `move` and import dedup.
-- A safe, idempotent migration of existing data, with a dry run.
+- A safe, idempotent **one-time** conversion of existing data (tooling removed afterward — solo app).
 - Keep `src/paths.ts` pure and the serial-worker contract unchanged.
 
 **Non-Goals:**
@@ -68,25 +68,29 @@ The ASR per-job log becomes `<folder>/asr.log` (and ollama's per-job error captu
 same folder), so a recording's diagnostics travel with it. `murmur logs` (daemon/import/failures)
 is unaffected.
 
-### 6. Migration = pure planner + applier, dry-run by default, run on boot
-A pure function enumerates legacy artifacts and produces a move plan (`<src> → <folder>/<role>`);
-the applier executes it. It is **idempotent** (skips already-foldered recordings), **non-destructive**
-(rename-only; refuses to overwrite a differing destination; reports conflicts), and **never orphans**
-(migrates whatever files a recording has). Exposed as `murmur migrate` (dry-run unless `--apply`) and
-auto-run once on daemon boot when legacy artifacts are detected, *before* the worker loop starts, so
-the daemon never sees a mixed-layout tree. The persisted queue is reconciled from `inbox/*/` after
-migration, so stale `wavPath`s from before the upgrade are rebuilt rather than trusted.
+### 6. Migration is a one-time operation, performed then removed (not a retained feature)
+This is a single-user app with one data store, so converting the legacy layout is a **one-time
+bootstrap**, not ongoing behavior worth carrying in the codebase. A throwaway planner enumerated
+legacy artifacts into a move plan (`<src> → <folder>/<role>`) and an applier executed it —
+**idempotent** (skips already-foldered recordings), **non-destructive** (rename-only; refuses to
+overwrite a differing destination; reports conflicts), and **never orphans** (migrates whatever files
+a recording has, and leaves audioless transcripts/summaries in place rather than guessing a lifecycle
+dir). It was run with a dry-run preview, applied against a backed-up store (verified; idempotent
+re-run a no-op), and then **all migration code was removed** — no `murmur migrate` command, no daemon
+boot hook. The boot watcher reconcile already rebuilds the queue from `inbox/*/`, so no migration-time
+queue handling is retained either.
+*Alternative considered:* keep `murmur migrate` + an auto-run-on-boot hook permanently — rejected as
+dead weight for a one-shot need in a solo app (the user explicitly preferred migrate-once-then-remove).
 
 ## Risks / Trade-offs
 
 - **Watcher regression / races** → Lean on atomic folder-rename publish (Decision 2) so completeness
   is structural; keep a size-stability fallback only for hand-dropped folders. Add watcher tests.
-- **Migration on real user data** → Dry-run by default, idempotent, rename-only, no overwrites, no
-  deletes; recommend a one-time backup of `MEETINGS_BASE` before `--apply`. Re-running completes a
-  partial migration.
-- **Migration vs a running daemon** → Run migration under the daemon's single-instance path before
-  the worker loop; `murmur migrate --apply` refuses (or coordinates via pause) when a daemon holds
-  the lock, reusing the existing lock pattern.
+- **Migration on real user data** → Was dry-run-previewed, idempotent, rename-only, no overwrites,
+  no deletes, run against a backed-up `MEETINGS_BASE` (98 files, verified; re-run a no-op). Tooling
+  removed afterward, so this risk does not recur.
+- **Migration vs a running daemon** → The (old-code) daemon was stopped before the one-time apply, so
+  nothing raced the conversion.
 - **Cross-device rename (EXDEV)** if `MEETINGS_BASE` ever spans filesystems → staging dirs are under
   `recordingsDir` (same fs); fall back to copy+unlink if `rename` reports `EXDEV`.
 - **Breaking on-disk layout** → there is no external consumer of `transcripts/`/`summaries/` beyond
@@ -95,18 +99,17 @@ migration, so stale `wavPath`s from before the upgrade are rebuilt rather than t
 ## Migration Plan
 
 1. Land code in dependency order: `paths.ts` → `recordings.ts` → producers (`recorder`, `import`) →
-   `watcher` → pipeline (`worker`, `asr`, `ollama`, `archive`) → `purge`/`status` → the migration +
-   `murmur migrate` → docs/tests.
-2. Deploy: stop the daemon, `murmur migrate` (dry-run) to review, back up `MEETINGS_BASE`,
-   `murmur migrate --apply`, then restart the daemon (which re-confirms the migration is a no-op).
-3. Rollback: the migration only renames files, so a bad run is recoverable by the idempotent re-run
-   or from the backup; no destructive step exists to undo.
+   `watcher` → pipeline (`worker`, `asr`, `ollama`, `archive`) → `purge`/`status` → docs/tests.
+2. One-time data conversion (done, then tooling removed): stop the daemon, back up `MEETINGS_BASE`,
+   dry-run preview, apply the throwaway migration, verify (idempotent re-run a no-op), then delete the
+   migration module/CLI/boot-hook.
+3. Deploy: merge this folder-only branch and start the daemon on the already-converted store.
+4. Rollback: the conversion only renamed files; recoverable from the backup at
+   `~/murmur-premigrate-backup-2026-06-23` if ever needed.
 
-## Open Questions
+## Resolved Questions
 
-- Should `asr.log` really live in the folder, or stay in `logs/` for easy `tail`? (Leaning: in the
-  folder for consolidation; `murmur logs <base>` could surface it.)
-- Should daemon boot **auto-apply** the migration, or only detect-and-warn and require explicit
-  `murmur migrate --apply`? (Leaning: auto-apply once, guarded by legacy detection.)
-- Do we keep thin back-compat shims for `paths.transcript(base)` during the transition, or hard-cut
-  all call sites in one change? (Leaning: hard-cut, since it's all in-repo.)
+- `asr.log` lives **in the recording folder** (diagnostics travel with the recording), not in `logs/`.
+- Migration is a **one-time manual operation, not retained** — no daemon auto-apply, no `murmur
+  migrate` command (single-user app; the conversion runs exactly once).
+- Path call sites were **hard-cut** to the folder model (no back-compat shims) — it's all in-repo.

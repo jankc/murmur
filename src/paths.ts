@@ -1,10 +1,14 @@
 // Single source of truth for every filesystem path the daemon touches.
-// All derived from $MEETINGS_BASE. Recordings move through folders to encode state:
-//   recordings/.partial/  — in-progress (ffmpeg writes here; NOT watched), moved to inbox when done
-//   recordings/inbox/      — complete/pending (watcher watches only here)
-//   recordings/processed/<YYYY-MM>/ — done (moved here after summarize+archive succeed)
-//   recordings/failed/     — a non-retryable failure (moved here so it doesn't retry-loop)
-import { join } from "node:path";
+// All derived from $MEETINGS_BASE. Each recording is a FOLDER named by its basename; the folder
+// moves through lifecycle dirs to encode state, and holds every artifact for that recording:
+//   recordings/.partial/<base>/  — in-progress staging (NOT watched), folder-renamed to inbox when done
+//   recordings/inbox/<base>/      — complete/pending (watcher watches only here)
+//   recordings/processed/<YYYY-MM>/<base>/ — done (moved here after summarize+archive succeed)
+//   recordings/failed/<base>/     — a non-retryable failure (moved here so it doesn't retry-loop)
+// Inside a recording folder the artifacts are role-named (see ARTIFACTS): recording.<ext>,
+// transcript.txt, summary.md, asr.log. paths.ts stays PURE (no fs) — resolving WHERE a folder
+// currently lives needs fs probing, which lives in recordings.ts.
+import { dirname, join } from "node:path";
 
 // murmur's OWN recordings are written as FLAC: lossless (identical ASR accuracy) at ~half the size
 // of 16 kHz mono s16le WAV. But the pipeline (whisper + pyannote, both ffmpeg-backed) is format-
@@ -29,6 +33,39 @@ export function stripAudioExt(name: string): string {
   return ext ? name.slice(0, -ext.length) : name;
 }
 
+// Role-named artifacts INSIDE a recording folder. Files are named by role (not basename), so a
+// recording's audio/transcript/summary/log travel together as one folder. `recording(ext)` keeps
+// the original container extension — FLAC for murmur's own captures, m4a/mp3/… for imports.
+export const ARTIFACTS = {
+  recording: (ext: string) => `recording${ext}`,
+  transcript: "transcript.txt",
+  summary: "summary.md",
+  asrLog: "asr.log",
+} as const;
+
+/** Absolute path of a recording's folder within a given lifecycle dir (inbox/processed-month/failed). */
+export function recordingFolder(lifecycleDir: string, base: string): string {
+  return join(lifecycleDir, base);
+}
+
+/** In-folder artifact paths derived from a recording file — `dirname(recordingFile)` IS the
+ *  recording's folder. The pipeline already holds the recording path (job.wavPath / a resolved
+ *  path), so it derives transcript/summary/log siblings without any fs probing. */
+export function artifactsFor(recordingFile: string): {
+  folder: string;
+  transcript: string;
+  summary: string;
+  asrLog: string;
+} {
+  const folder = dirname(recordingFile);
+  return {
+    folder,
+    transcript: join(folder, ARTIFACTS.transcript),
+    summary: join(folder, ARTIFACTS.summary),
+    asrLog: join(folder, ARTIFACTS.asrLog),
+  };
+}
+
 export interface Paths {
   base: string;
   recordingsDir: string; // parent of .partial/inbox/processed/failed
@@ -36,13 +73,11 @@ export interface Paths {
   inboxDir: string;
   processedDir: string;
   failedDir: string;
-  // Scratch for `murmur import` (transcode external sources to FLAC here, then atomic-rename
+  // Scratch for `murmur import` (copy external sources here, then atomic-rename the folder
   // into inbox/). Deliberately NOT .partial/ — that folder is the recorder's, and a half-
   // written file there could collide with finalize/recovery. Same filesystem as inbox/ so the
-  // rename is atomic.
+  // directory rename is atomic.
   importTmpDir: string;
-  transcriptsDir: string;
-  summariesDir: string;
   logsDir: string;
   stateDir: string;
   // Active-recording state (one JSON; may track >1 capture process — see recorder.ts).
@@ -55,13 +90,10 @@ export interface Paths {
   importLock: string; // single-run lock so a hand-run `murmur import` can't race the scheduled one
   importLedger: string; // `murmur import` dedup cache (id → {size, basename, importedAt})
   failureLog: string;
-  // Per-recording derived paths. There's deliberately no processed/failed builder: those folders
-  // hold a mix of formats (FLAC captures + imports), so callers must resolve via recordings.ts
-  // locate()/move() (which check every known extension) rather than assume one.
-  partialWav: (basename: string) => string; // raw PCM capture target (always .wav)
-  inboxWav: (basename: string) => string; // canonical artifact target (.flac) for NEW recordings
-  transcript: (basename: string) => string;
-  summary: (basename: string) => string;
+  // There's deliberately no per-recording path builder here: a recording's folder can live under
+  // inbox/processed-month/failed (resolved via recordings.ts locate()/move()), and its in-folder
+  // artifacts are derived from the recording file via artifactsFor() / ARTIFACTS — keeping this
+  // layer pure (no fs).
 }
 
 export function buildPaths(base: string): Paths {
@@ -71,8 +103,6 @@ export function buildPaths(base: string): Paths {
   const processedDir = join(recordingsDir, "processed");
   const failedDir = join(recordingsDir, "failed");
   const importTmpDir = join(recordingsDir, ".import-tmp");
-  const transcriptsDir = join(base, "transcripts");
-  const summariesDir = join(base, "summaries");
   const logsDir = join(base, "logs");
   const stateDir = join(base, "state");
 
@@ -84,8 +114,6 @@ export function buildPaths(base: string): Paths {
     processedDir,
     failedDir,
     importTmpDir,
-    transcriptsDir,
-    summariesDir,
     logsDir,
     stateDir,
     recordingState: join(stateDir, "recording.json"),
@@ -96,13 +124,5 @@ export function buildPaths(base: string): Paths {
     importLock: join(stateDir, "import.lock"),
     importLedger: join(stateDir, "import-ledger.json"),
     failureLog: join(logsDir, "process-failures.log"),
-    // .partial/ holds the raw PCM capture — stays WAV (maximally crash-salvageable); it's
-    // transcoded to canonical FLAC at the .partial→inbox boundary, never archived as-is.
-    partialWav: (b: string) => join(partialDir, `${b}.wav`),
-    // Inbox target for murmur's OWN captures (FLAC). Imported recordings keep their own extension
-    // and are resolved (in inbox/failed/processed) by recordings.ts locate(), which checks all.
-    inboxWav: (b: string) => join(inboxDir, `${b}${CANONICAL_AUDIO_EXT}`),
-    transcript: (b: string) => join(transcriptsDir, `${b}.txt`),
-    summary: (b: string) => join(summariesDir, `${b}.md`),
   });
 }

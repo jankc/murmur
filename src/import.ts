@@ -17,7 +17,7 @@ import { readJson, writeJsonAtomic } from "./state.ts";
 import { acquirePidLock, releasePidLock } from "./lock.ts";
 import { loadSources, enumerate } from "./sources.ts";
 import { ensureLocal } from "./materialize.ts";
-import { isRecordingFile } from "./paths.ts";
+import { ARTIFACTS, isRecordingFile, recordingFolder } from "./paths.ts";
 import { locate } from "./recordings.ts";
 import { log } from "./log.ts";
 
@@ -104,8 +104,8 @@ async function importSources(cfg: Config, sources: ReturnType<typeof loadSources
       // would never enqueue it, so importing it would silently strand the file in inbox/. Count it
       // as failed and leave it un-ledgered so it's visible and retried once the ext is whitelisted.
       const ext = extname(c.srcPath).toLowerCase();
-      const name = `${c.basename}${ext}`;
-      if (!isRecordingFile(name)) {
+      const recName = ARTIFACTS.recording(ext); // recording.<ext> inside the folder
+      if (!isRecordingFile(recName)) {
         log.warn("import", `${c.id}: "${ext || "no extension"}" isn't a supported audio format (add it to KNOWN_AUDIO_EXTS) — skipped`);
         failed++;
         continue;
@@ -118,29 +118,32 @@ async function importSources(cfg: Config, sources: ReturnType<typeof loadSources
         continue;
       }
 
-      // Copy the source verbatim (no transcode), keeping its extension. Copy to scratch first,
-      // then atomic-rename into inbox/ (same filesystem) so the watcher never sees a partial file.
-      const tmp = join(cfg.paths.importTmpDir, name);
-      rmSync(tmp, { force: true });
+      // Copy the source verbatim (no transcode), keeping its extension, into a staged recording
+      // folder (.import-tmp/<base>/recording.<ext>), then atomic-rename the FOLDER into inbox/
+      // (same filesystem) so the watcher only ever sees a complete recording folder.
+      const stageFolder = recordingFolder(cfg.paths.importTmpDir, c.basename);
+      const stageFile = join(stageFolder, recName);
+      rmSync(stageFolder, { recursive: true, force: true });
+      mkdirSync(stageFolder, { recursive: true });
       try {
-        await copyFile(c.srcPath, tmp);
+        await copyFile(c.srcPath, stageFile);
       } catch (err) {
         log.error("import", `could not copy ${c.id}: ${String(err)}`);
-        rmSync(tmp, { force: true });
+        rmSync(stageFolder, { recursive: true, force: true });
         failed++;
         continue;
       }
       try {
-        await rename(tmp, join(cfg.paths.inboxDir, name));
+        await rename(stageFolder, recordingFolder(cfg.paths.inboxDir, c.basename));
       } catch (err) {
         log.error("import", `could not finalize ${c.basename}: ${String(err)}`);
-        rmSync(tmp, { force: true });
+        rmSync(stageFolder, { recursive: true, force: true });
         failed++;
         continue;
       }
       ledger.items[c.id] = { size: c.size, basename: c.basename, importedAt: Date.now() };
       imported++;
-      log.info("import", `imported ${c.id} → inbox/${name}`);
+      log.info("import", `imported ${c.id} → inbox/${c.basename}/${recName}`);
     }
 
     summaries.push({ name: src.name, scanned: candidates.length, imported, failed });

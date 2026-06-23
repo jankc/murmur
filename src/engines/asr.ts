@@ -1,14 +1,16 @@
 // Transcription (+ optional diarization) via one Python helper (asr/asr.py) that runs
 // mlx-whisper and pyannote community-1 in a single venv, emitting JSON. murmur keeps the
-// orchestration and the (tested) chunk↔turn merge. The helper reads the wav read-only, so
-// there's no scratch/rename/locate dance — we just parse stdout and write transcripts/<base>.txt.
+// orchestration and the (tested) chunk↔turn merge. The helper reads the recording read-only, so
+// there's no scratch/rename/locate dance — we just parse stdout and write the transcript and the
+// per-job ASR log into the recording's own folder (transcript.txt, asr.log).
 import { mkdir, rm } from "node:fs/promises";
 import { openSync, closeSync, mkdirSync, writeSync } from "node:fs";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Config } from "../config.ts";
 import type { QueueItem } from "../queue.ts";
+import { artifactsFor } from "../paths.ts";
 import { log } from "../log.ts";
 import { AbortError, EngineError, isAbort } from "./errors.ts";
 
@@ -31,20 +33,21 @@ interface AsrOutput {
 
 export async function transcribe(cfg: Config, job: QueueItem, signal: AbortSignal): Promise<string> {
   const wantDiarize = cfg.diarize && !!cfg.hfToken;
+  // Every artifact lives in the recording's own folder, derived from the recording file.
+  const { folder, transcript: dest, asrLog } = artifactsFor(job.wavPath);
   // Trim leading/trailing near-silence into a temp before ASR (when enabled). This keeps
   // whisper's first-30s language auto-detect on real speech (a silent lead-in otherwise gets
   // mis-detected as English) and avoids it hallucinating over the quiet head/tail. `offset` is
   // how much head was removed, added back below so timestamps stay anchored to the original.
   const trimmed = cfg.trimSilence
-    ? await trimSilence(cfg, job.wavPath, job.basename, signal)
+    ? await trimSilence(cfg, job.wavPath, job.basename, asrLog, signal)
     : { path: job.wavPath, offset: 0, cleanup: async () => {} };
 
   try {
-    const out = await runAsr(cfg, job.basename, trimmed.path, signal, wantDiarize);
+    const out = await runAsr(cfg, job.basename, trimmed.path, asrLog, signal, wantDiarize);
     if (trimmed.offset > 0) reanchor(out, trimmed.offset);
 
-    const dest = cfg.paths.transcript(job.basename);
-    await mkdir(cfg.paths.transcriptsDir, { recursive: true });
+    await mkdir(folder, { recursive: true });
 
     let text: string;
     if (out.chunks.length === 0) {
@@ -121,10 +124,9 @@ async function probeDuration(cfg: Config, file: string): Promise<number | null> 
  *  offset so the caller can re-anchor timestamps. Only the ends are trimmed — internal pauses are
  *  preserved (the `areverse` sandwich), so the timeline (and diarization) stays intact. Any
  *  failure falls back to the original file (offset 0): trimming must never lose a meeting. */
-async function trimSilence(cfg: Config, src: string, label: string, signal: AbortSignal): Promise<Trimmed> {
+async function trimSilence(cfg: Config, src: string, label: string, logPath: string, signal: AbortSignal): Promise<Trimmed> {
   const noop: Trimmed = { path: src, offset: 0, cleanup: async () => {} };
-  const logPath = join(cfg.paths.logsDir, `asr-${label}.log`);
-  mkdirSync(cfg.paths.logsDir, { recursive: true });
+  mkdirSync(dirname(logPath), { recursive: true });
 
   const headFilter = `silenceremove=start_periods=1:start_threshold=${cfg.trimThresholdDb}dB:start_duration=${TRIM_MIN_SOUND_S}`;
   const tailFilter = `areverse,${headFilter},areverse`;
@@ -176,9 +178,9 @@ async function trimSilence(cfg: Config, src: string, label: string, signal: Abor
   }
 }
 
-/** Spawn the asr helper on a wav and parse its JSON ({language, chunks, turns}). stderr is
- *  streamed to logs/asr-<base>.log; stdout is captured. Diarization is requested inline. */
-async function runAsr(cfg: Config, label: string, wav: string, signal: AbortSignal, diarize: boolean): Promise<AsrOutput> {
+/** Spawn the asr helper on a recording and parse its JSON ({language, chunks, turns}). stderr is
+ *  streamed to the recording folder's asr.log; stdout is captured. Diarization is requested inline. */
+async function runAsr(cfg: Config, label: string, wav: string, logPath: string, signal: AbortSignal, diarize: boolean): Promise<AsrOutput> {
   const script = join(cfg.repoDir, "asr", "asr.py");
   if (!existsSync(cfg.pythonBin)) {
     throw new EngineError(`asr venv python not found at ${cfg.pythonBin} (see README → Install)`, 1);
@@ -193,10 +195,9 @@ async function runAsr(cfg: Config, label: string, wav: string, signal: AbortSign
   }
   log.info("asr", `transcribing ${label} (lang=${cfg.language})${diarize ? " (diarized)" : ""}`);
 
-  // Stream the helper's stderr (model load + progress + warnings) straight to a per-job
-  // log file (like the recorder does for ffmpeg); stdout is the JSON payload we parse.
-  const logPath = join(cfg.paths.logsDir, `asr-${label}.log`);
-  mkdirSync(cfg.paths.logsDir, { recursive: true });
+  // Stream the helper's stderr (model load + progress + warnings) straight to the recording's
+  // own per-job log file (like the recorder does for ffmpeg); stdout is the JSON payload we parse.
+  mkdirSync(dirname(logPath), { recursive: true });
   const logFd = openSync(logPath, "a");
   writeSync(logFd, `\n=== asr ${label}${diarize ? " (diarized)" : ""} ===\n`);
 

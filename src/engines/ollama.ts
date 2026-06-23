@@ -1,8 +1,9 @@
 // Summarization via Ollama's HTTP API (model configurable via MODEL_SUMMARY). Preflight Ollama
 // (start the app + wait if down), classify the recording (triage), assemble prompts/base.md +
-// prompts/types/<type>.md, then write summaries/<base>.md.
-import { basename as pathBasename, join } from "node:path";
+// prompts/types/<type>.md, then write summary.md into the recording's own folder.
+import { basename as pathBasename, dirname, join } from "node:path";
 import type { Config } from "../config.ts";
+import { ARTIFACTS } from "../paths.ts";
 import { sleep } from "../util.ts";
 import { log } from "../log.ts";
 import { AbortError, EngineError, isAbort } from "./errors.ts";
@@ -87,13 +88,16 @@ async function classify(cfg: Config, transcript: string, signal: AbortSignal, ti
 }
 
 export async function summarize(cfg: Config, transcriptPath: string, signal: AbortSignal): Promise<SummarizeResult> {
-  const base = pathBasename(transcriptPath, ".txt");
+  // The transcript lives in the recording's folder (<folder>/transcript.txt); the summary is its
+  // sibling and the recording's key is the folder name — not the "transcript" filename.
+  const folder = dirname(transcriptPath);
+  const base = pathBasename(folder);
+  const out = join(folder, ARTIFACTS.summary);
   const transcript = await Bun.file(transcriptPath).text();
 
   // Trivially short → mark empty without spending an LLM call (or risking misclassification).
   if (wordCount(transcript) < MIN_WORDS) {
     log.info("ollama", `transcript ${base} below ${MIN_WORDS} words — marking empty (skipping LLM)`);
-    const out = cfg.paths.summary(base);
     await Bun.write(out, EMPTY_MARKER + "\n");
     return { summaryPath: out, type: "summary", language: "cs" };
   }
@@ -147,16 +151,15 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
     throw new EngineError(`ollama request failed: ${String(err)}`, 1);
   }
   if (!res.ok) {
-    // Capture the failing body to a per-recording log so a failure is traceable (the
+    // Capture the failing body into the recording's folder so a failure is traceable (the
     // interleaved daemon log only keeps one truncated line).
     const body = (await res.text()).slice(-4000);
-    const logPath = join(cfg.paths.logsDir, `summary-${base}.log`);
+    const logPath = join(folder, "summary.error.log");
     await Bun.write(logPath, `ollama HTTP ${res.status} for ${base} with ${cfg.modelSummary}\n\n${body}\n`).catch(() => {});
     throw new EngineError(`ollama HTTP ${res.status} (see ${logPath})`, res.status, body.slice(-2000));
   }
   const { response } = (await res.json()) as { response: string };
 
-  const out = cfg.paths.summary(base);
   await Bun.write(out, response);
   return { summaryPath: out, type: triage.type, language: triage.language };
 }

@@ -22,8 +22,10 @@ self-describing and is the natural home for the upcoming per-recording summary c
   audio file; the **recorder** and **import** produce `inbox/<base>/recording.<ext>`; the **worker**,
   **asr**, **ollama**, **archive**, and **purge** read/write folder-relative paths (and the per-job
   ASR log moves into the folder as `asr.log`).
-- A new **one-time, idempotent migration** moves existing scattered artifacts into per-recording
-  folders so current data is not orphaned, exposed as `murmur migrate` (and run once on daemon boot).
+- Existing scattered data was converted to per-recording folders by a **one-time migration** so
+  current data is not orphaned. As this is a single-user, single-store app, the migration was run
+  and verified once and then **removed** — it is not retained as a `murmur` command or a daemon
+  boot step (see Tasks §7).
 - Docs (`README.md`, `murmur.toml.example`) describe the new layout.
 
 ## Capabilities
@@ -32,8 +34,6 @@ self-describing and is the natural home for the upcoming per-recording summary c
 - `recording-storage`: the per-recording folder layout, the folder-as-state lifecycle
   (`inbox` → `processed/<YYYY-MM>` → `failed`), and folder-based `locate`/`move`/`resolveWav` —
   including how the recorder, import, watcher, and pipeline produce and consume the folder.
-- `recording-migration`: a safe, idempotent, re-runnable migration from the legacy scattered layout
-  to per-recording folders, with a dry-run and a guarantee it never orphans or destroys data.
 
 ### Modified Capabilities
 <!-- None — openspec/specs/ has no existing specs; this change establishes the first ones. -->
@@ -49,9 +49,10 @@ self-describing and is the natural home for the upcoming per-recording summary c
   `src/engines/ollama.ts`, `src/archive.ts` (vault note keyed by title is out of scope),
   `src/purge.ts` (remove the whole folder), `src/queue.ts`/`src/jobstate.ts`/`src/status.ts`
   (`QueueItem` keeps `basename` as key; `wavPath` points into the folder).
-- **New surface:** a `murmur migrate` CLI command + a one-shot migration on daemon boot.
+- **One-time migration:** a throwaway planner+applier converted the existing store, then was
+  removed (no retained CLI command or daemon hook).
 - **Tests & docs:** tests touching paths/recordings/watcher/queue updated; new coverage for
-  folder-based `locate`/`move` and the migration; `README.md` + `murmur.toml.example` updated.
+  folder-based `locate`/`move` and watcher folder detection; `README.md` + `murmur.toml.example` updated.
 - **Out of scope:** the Obsidian vault note path (keyed by title, unchanged); the serial-worker
   contract must not change.
 

@@ -7,14 +7,14 @@ import { basename, dirname, join } from "node:path";
 import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { userInfo } from "node:os";
 import { loadConfig, configAsEnv, type Config } from "./config.ts";
-import { isRecordingFile, stripAudioExt } from "./paths.ts";
+import { artifactsFor, isRecordingFile, stripAudioExt } from "./paths.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/asr.ts";
 import { summarize } from "./engines/ollama.ts";
 import { archiveSummary } from "./archive.ts";
 import { type QueueItem } from "./queue.ts";
-import { resolveWav, move } from "./recordings.ts";
+import { resolveWav, recordingFileIn, move } from "./recordings.ts";
 import { runImport } from "./import.ts";
 import { purge } from "./purge.ts";
 import { EngineError } from "./engines/errors.ts";
@@ -49,6 +49,13 @@ async function fetchStatus(cfg: Config): Promise<StatusSnapshot & { daemon: stri
   return { daemon: up ? "running" : "offline", ...base };
 }
 
+/** The recording's base (folder) name for a recording file: the folder name for a managed
+ *  `<base>/recording.<ext>`, or the filename stem for an external one-off path. */
+function baseOf(wavPath: string): string {
+  const stem = stripAudioExt(basename(wavPath));
+  return stem === "recording" ? basename(dirname(wavPath)) : stem;
+}
+
 function flag(name: string): string | undefined {
   const i = rest.indexOf(name);
   return i >= 0 ? rest[i + 1] : undefined;
@@ -81,18 +88,18 @@ function newestRecording(cfg: Config): string | null {
 }
 
 async function runInline(wavPath: string): Promise<{ txt: string; md: string }> {
-  const base = stripAudioExt(basename(wavPath));
+  const base = baseOf(wavPath);
   const job: QueueItem = { basename: base, wavPath, enqueuedAt: 0, attempts: 0 };
   const signal = new AbortController().signal;
-  // Process unconditionally, overwriting any prior outputs — same as the daemon worker.
-  const txt = cfg.paths.transcript(base);
-  const md = cfg.paths.summary(base);
+  // Process unconditionally, overwriting any prior outputs — same as the daemon worker. Every
+  // artifact path is derived from the recording file's own folder.
+  const { folder, transcript: txt, summary: md } = artifactsFor(wavPath);
   let stage = "transcribe";
   try {
     await transcribe(cfg, job, signal);
     stage = "summarize";
     const result = await summarize(cfg, txt, signal);
-    await archiveSummary(cfg, base, signal, result).catch((e) => console.error(`archive: ${String(e)}`));
+    await archiveSummary(cfg, folder, base, signal, result).catch((e) => console.error(`archive: ${String(e)}`));
     // Only retire managed recordings (under MEETINGS_BASE) to processed/; an external one-off
     // path has no managed home, and a basename match could move an unrelated recording.
     if (wavPath.startsWith(cfg.meetingsBase)) await move(cfg, base, "processed");
@@ -298,7 +305,9 @@ switch (cmd) {
     const dev = flag("--device") ?? flag("-d");
     const recorder = new MeetingRecorder(dev ? { ...cfg, recordDeviceIndex: dev } : cfg);
     const r = await recorder.start();
-    console.log(r.message);
+    // start() returns the recording's basename — surface it so the caller knows the folder
+    // (inbox/<base>/) this capture will publish to.
+    console.log(r.base ? `${r.message} [${r.base}]` : r.message);
     if (!r.ok) process.exit(1);
     break;
   }
@@ -501,7 +510,9 @@ switch (cmd) {
   case "retry-failed": {
     let names: string[];
     try {
-      names = readdirSync(cfg.paths.failedDir).filter(isRecordingFile);
+      names = readdirSync(cfg.paths.failedDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+        .map((e) => e.name);
     } catch {
       names = [];
     }
@@ -513,9 +524,15 @@ switch (cmd) {
     const stillFailing: string[] = [];
     for (const n of names) {
       // Don't let one bad recording (inline path) abort the rest — catch, continue, report.
-      // Dispatch the actual file (n keeps its real extension — an entry may be .wav).
+      // Dispatch the in-folder recording file (it keeps its real extension — could be .wav/.m4a).
+      const rec = await recordingFileIn(join(cfg.paths.failedDir, n));
+      if (!rec) {
+        stillFailing.push(n);
+        console.error(`  ✗ ${n}: no recording file in failed/${n}/`);
+        continue;
+      }
       try {
-        await dispatchWav(join(cfg.paths.failedDir, n));
+        await dispatchWav(rec);
       } catch (e) {
         stillFailing.push(n);
         console.error(`  ✗ ${n}: ${String(e)}`);
@@ -529,8 +546,8 @@ switch (cmd) {
     const arg = positional() ?? newestRecording(cfg) ?? "";
     const wav = (await resolveWav(cfg, arg)) ?? (arg && (await Bun.file(arg).exists()) ? arg : null);
     if (!wav) die(`recording not found: ${arg || "(none)"}`);
-    const base = stripAudioExt(basename(wav));
-    const txt = cfg.paths.transcript(base);
+    const base = baseOf(wav);
+    const { transcript: txt } = artifactsFor(wav);
     await transcribe(cfg, { basename: base, wavPath: wav, enqueuedAt: 0, attempts: 0 }, new AbortController().signal);
     console.log(txt);
     break;
@@ -539,11 +556,19 @@ switch (cmd) {
   case "summarize": {
     const arg = positional();
     if (!arg) die("usage: murmur summarize <transcript|basename>");
-    const txt = (await Bun.file(arg).exists()) ? arg : cfg.paths.transcript(basename(arg, ".txt"));
-    if (!(await Bun.file(txt).exists())) die(`transcript not found: ${arg}`);
+    // Accept a direct transcript path, or a recording name/basename → its folder's transcript.txt.
+    let txt: string;
+    if (await Bun.file(arg).exists()) {
+      txt = arg;
+    } else {
+      const wav = await resolveWav(cfg, arg);
+      txt = wav ? artifactsFor(wav).transcript : "";
+    }
+    if (!txt || !(await Bun.file(txt).exists())) die(`transcript not found: ${arg}`);
+    const folder = dirname(txt);
     const sig = new AbortController().signal;
     const result = await summarize(cfg, txt, sig);
-    await archiveSummary(cfg, basename(txt, ".txt"), sig, result).catch((e) => console.error(`archive: ${String(e)}`));
+    await archiveSummary(cfg, folder, basename(folder), sig, result).catch((e) => console.error(`archive: ${String(e)}`));
     console.log(result.summaryPath);
     break;
   }

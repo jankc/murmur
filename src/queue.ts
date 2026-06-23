@@ -1,15 +1,14 @@
 // Persistent FIFO job queue, mirrored to state/queue.json on every mutation.
 // The worker uses peek()-then-commitDequeue() so a job is only removed once both
 // pipeline stages succeed — a crash mid-job leaves it at the head for replay.
-import { basename as pathBasename } from "node:path";
+import { basename as pathBasename, dirname } from "node:path";
 import type { Config } from "./config.ts";
-import { stripAudioExt } from "./paths.ts";
 import { readJson, writeJsonAtomic } from "./state.ts";
 import { log } from "./log.ts";
 
 export interface QueueItem {
-  basename: string;
-  wavPath: string;
+  basename: string; // the recording's folder name (its key through the lifecycle)
+  wavPath: string; // the in-folder recording file: <lifecycle>/<basename>/recording.<ext>
   enqueuedAt: number;
   attempts: number;
 }
@@ -62,7 +61,9 @@ export class Queue {
    * null if it was a duplicate.
    */
   async enqueue(wavPath: string): Promise<QueueItem | null> {
-    const base = stripAudioExt(pathBasename(wavPath));
+    // wavPath is the in-folder recording file (<lifecycle>/<base>/recording.<ext>), so the
+    // recording's key is its FOLDER name — the parent dir of the recording file.
+    const base = pathBasename(dirname(wavPath));
     if (this.items.some((i) => i.basename === base) || this.enqueuing.has(base)) return null;
     this.enqueuing.add(base);
     try {

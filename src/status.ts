@@ -2,7 +2,6 @@
 // GET /status, the CLI's offline `status`, and the SwiftBar renderer can't drift.
 import { readdirSync } from "node:fs";
 import type { Config } from "./config.ts";
-import { isRecordingFile } from "./paths.ts";
 import type { Recorder } from "./recorder.ts";
 import { MeetingRecorder } from "./recorder.ts";
 import { PauseStore, readCurrent, type PauseMode, type CurrentJob } from "./jobstate.ts";
@@ -45,10 +44,11 @@ export async function offlineSnapshot(cfg: Config): Promise<StatusSnapshot> {
   return statusSnapshot(cfg, recorder, pause, queue.items);
 }
 
-/** Count recordings parked in recordings/failed/ (awaiting `murmur retry-failed`). */
+/** Count recording folders parked in recordings/failed/ (awaiting `murmur retry-failed`). */
 function countFailed(cfg: Config): number {
   try {
-    return readdirSync(cfg.paths.failedDir).filter(isRecordingFile).length;
+    return readdirSync(cfg.paths.failedDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !e.name.startsWith(".")).length;
   } catch {
     return 0;
   }

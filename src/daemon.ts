@@ -19,8 +19,6 @@ export async function runDaemon(cfg: Config): Promise<void> {
     cfg.paths.inboxDir,
     cfg.paths.processedDir,
     cfg.paths.failedDir,
-    cfg.paths.transcriptsDir,
-    cfg.paths.summariesDir,
     cfg.paths.logsDir,
     cfg.paths.stateDir,
   ]) {

@@ -10,7 +10,9 @@ import type { Config } from "./config.ts";
 
 let base: string;
 let cfg: Config;
-const wav = (name: string) => join(base, "recordings/inbox", `${name}.wav`);
+// A recording is a folder named by its basename; the queue keys on that folder name (the parent
+// dir of the in-folder recording.<ext>), so the test paths mirror inbox/<base>/recording.wav.
+const wav = (name: string) => join(base, "recordings/inbox", name, "recording.wav");
 
 beforeEach(() => {
   base = mkdtempSync(join(tmpdir(), "murmur-test-"));
@@ -38,9 +40,9 @@ describe("Queue.enqueue", () => {
   });
 
   test("enqueues even when a summary already exists (reprocess via inbox)", async () => {
-    // Location is the state: a wav handed to the queue is meant to be processed, so an
-    // existing transcript/summary must NOT block it (re-dropping into inbox = reprocess).
-    await Bun.write(cfg.paths.summary("done"), "# Title\n\n# Shrnutí\nx");
+    // Location is the state: a recording handed to the queue is meant to be processed, so an
+    // existing transcript/summary in its folder must NOT block it (re-dropping = reprocess).
+    await Bun.write(join(base, "recordings/inbox", "done", "summary.md"), "# Title\n\n# Shrnutí\nx");
     const q = await Queue.load(cfg);
     const item = await q.enqueue(wav("done"));
     expect(item?.basename).toBe("done");

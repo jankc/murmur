@@ -12,18 +12,19 @@ import type { Config } from "./config.ts";
 import { generateTitle, EMPTY_MARKER, type TriageType } from "./engines/ollama.ts";
 import { isAbort } from "./engines/errors.ts";
 import { parseStamp, stampFromDate } from "./stamp.ts";
-import { locate } from "./recordings.ts";
-import { CANONICAL_AUDIO_EXT } from "./paths.ts";
+import { recordingFileIn } from "./recordings.ts";
+import { ARTIFACTS, CANONICAL_AUDIO_EXT } from "./paths.ts";
 import { log } from "./log.ts";
 
 export async function archiveSummary(
   cfg: Config,
+  folder: string,
   base: string,
   signal: AbortSignal,
   meta: { type: TriageType; language: "cs" | "en" },
 ): Promise<void> {
   if (!cfg.vaultRoot) return; // archiving disabled
-  const summaryPath = cfg.paths.summary(base);
+  const summaryPath = join(folder, ARTIFACTS.summary);
   const summaryFile = Bun.file(summaryPath);
   if (!(await summaryFile.exists())) return;
 
@@ -55,11 +56,12 @@ export async function archiveSummary(
     }
   }
 
-  // Resolve the actual stored recording once — for the duration and the frontmatter source
-  // pointer (a recording murmur produced is .flac; an imported one keeps its own format).
-  const audioPath = await locate(cfg, base); // inbox during processing, processed/ afterwards
-  const sourceName = audioPath ? basename(audioPath) : `${base}${CANONICAL_AUDIO_EXT}`;
-  const speakers = await countSpeakers(cfg, base);
+  // Resolve the in-folder recording once — for the duration and the frontmatter source pointer
+  // (a recording murmur produced is recording.flac; an imported one keeps its own extension). The
+  // source points into the recordings tree as <base>/<recording.<ext>>.
+  const audioPath = await recordingFileIn(folder);
+  const sourceName = `${base}/${audioPath ? basename(audioPath) : ARTIFACTS.recording(CANONICAL_AUDIO_EXT)}`;
+  const speakers = await countSpeakers(join(folder, ARTIFACTS.transcript));
   const duration = audioPath ? await durationOf(cfg, audioPath) : null;
   // Default-bucket recordings keep the historical `meeting` tag so existing vault queries hold;
   // the special types get their own tag (#dictation/#list/#journal/#lecture).
@@ -127,8 +129,8 @@ function yaml(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-async function countSpeakers(cfg: Config, base: string): Promise<number> {
-  const t = Bun.file(cfg.paths.transcript(base));
+async function countSpeakers(transcriptPath: string): Promise<number> {
+  const t = Bun.file(transcriptPath);
   if (!(await t.exists())) return 0;
   return new Set((await t.text()).match(/SPEAKER_\d+/g) ?? []).size;
 }

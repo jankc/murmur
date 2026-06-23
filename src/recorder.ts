@@ -21,8 +21,9 @@
 // regardless of who started it (CLI or daemon) and a recording can span >1 process. Capture
 // processes are detached (unref) so they outlive a short-lived `murmur record` invocation.
 import { existsSync, readFileSync, writeFileSync, openSync, mkdirSync, rmSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type { Config } from "./config.ts";
+import { ARTIFACTS, CANONICAL_AUDIO_EXT, recordingFolder } from "./paths.ts";
 import { notify } from "./notify.ts";
 import { sleep } from "./util.ts";
 import { log } from "./log.ts";
@@ -31,10 +32,14 @@ import { transcodeToFlac16k } from "./transcode.ts";
 export interface Recorder {
   isRecording(): boolean;
   currentFile(): string | null;
-  start(): Promise<{ ok: boolean; message: string }>;
+  start(): Promise<{ ok: boolean; message: string; base?: string }>;
   stop(): Promise<{ ok: boolean; message: string }>;
   finalizeOrphans(): Promise<string | null>;
 }
+
+// The canonical FLAC artifact filename inside a recording folder (recording.flac). Imports keep
+// their own extension; murmur's OWN captures are always transcoded to this.
+const CANONICAL_RECORDING = ARTIFACTS.recording(CANONICAL_AUDIO_EXT);
 
 interface RecordingPart {
   pid: number;
@@ -70,7 +75,7 @@ export class MeetingRecorder implements Recorder {
     return this.readState()?.parts[0]?.file ?? null;
   }
 
-  async start(): Promise<{ ok: boolean; message: string }> {
+  async start(): Promise<{ ok: boolean; message: string; base?: string }> {
     if (this.isRecording()) return { ok: false, message: "already recording" };
     await this.finalizeOrphans(); // clear any crashed/stale recording first
 
@@ -92,7 +97,9 @@ export class MeetingRecorder implements Recorder {
     const capture = state.parts[0]!.file;
     notify(this.cfg, "Meeting recording started");
     log.info("recorder", `recording [${state.backend}] → ${capture}`);
-    return { ok: true, message: `recording started (${capture})` };
+    // Expose the basename so the caller can associate per-recording data with this capture
+    // (the recording folder is published as inbox/<base>/ when it finalizes).
+    return { ok: true, message: `recording started (${capture})`, base };
   }
 
   /** ffmpeg backend: one ffmpeg captures the avfoundation device through the pan filter,
@@ -181,7 +188,9 @@ export class MeetingRecorder implements Recorder {
       if (st.parts.some((p) => alive(p.pid))) {
         if (Date.now() - st.startedAt > this.cfg.maxDurationSeconds * 1000) {
           log.info("recorder", `recording ${st.base} hit max duration — auto-stopping`);
-          return (await this.stop()).ok ? this.cfg.paths.inboxWav(st.base) : null;
+          return (await this.stop()).ok
+            ? join(recordingFolder(this.cfg.paths.inboxDir, st.base), CANONICAL_RECORDING)
+            : null;
         }
         return null; // in progress
       }
@@ -194,8 +203,10 @@ export class MeetingRecorder implements Recorder {
     return this.moveStrayPartial();
   }
 
-  /** Transcode the raw capture (parts[0]) → canonical 16 kHz mono FLAC and atomically move it
-   *  into inbox/. See FinalizeResult: "failed" keeps the raw capture for the caller to retry. */
+  /** Transcode the raw capture (parts[0]) → canonical 16 kHz mono FLAC inside a per-recording
+   *  folder staged in .partial/, then atomically rename the whole FOLDER into inbox/ — so the
+   *  watcher only ever sees a complete recording folder. See FinalizeResult: "failed" keeps the
+   *  raw capture for the caller to retry. */
   private async finalizeState(st: RecordingState): Promise<FinalizeResult> {
     const capture = st.parts[0]?.file;
     if (!capture || !existsSync(capture) || statSync(capture).size === 0) {
@@ -203,31 +214,35 @@ export class MeetingRecorder implements Recorder {
       this.cleanupTemps(st);
       return { status: "empty" };
     }
-    // Encode FLAC into a temp in .partial/ (not the watched inbox/), then atomic-rename — so the
-    // watcher never sees a half-written file. Encode runs only once the capture is complete.
-    const tmp = join(this.cfg.paths.partialDir, `${st.base}.flac`);
-    if (!(await transcodeToFlac16k(this.cfg, capture, tmp))) {
-      rmSync(tmp, { force: true });
+    // Build the recording folder in .partial/ (not the watched inbox/): encode the FLAC into
+    // .partial/<base>/recording.flac, then atomic-rename the folder. The folder appearing in
+    // inbox/ is, by construction, complete. Encode runs only once the capture is complete.
+    const stageFolder = recordingFolder(this.cfg.paths.partialDir, st.base);
+    const stageFlac = join(stageFolder, CANONICAL_RECORDING);
+    rmSync(stageFolder, { recursive: true, force: true }); // clear any stale staging folder
+    mkdirSync(stageFolder, { recursive: true });
+    if (!(await transcodeToFlac16k(this.cfg, capture, stageFlac))) {
+      rmSync(stageFolder, { recursive: true, force: true });
       // Keep the raw capture (and, via the caller, the state) so finalize retries — never lose
       // the only copy of the meeting on a transient ffmpeg hiccup. No cleanupTemps here.
       log.error("recorder", `${st.base}: transcode failed — kept raw capture ${capture} for retry; manual: ffmpeg -i "${capture}" -ac 1 -ar 16000 -c:a flac "<out>.flac"`);
       return { status: "failed" };
     }
-    const dest = this.cfg.paths.inboxWav(st.base); // canonical .flac
+    const dest = recordingFolder(this.cfg.paths.inboxDir, st.base);
     try {
       mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
-      renameSync(tmp, dest);
-      log.info("recorder", `finalized → inbox/${basename(dest)}`);
+      renameSync(stageFolder, dest); // atomic folder publish within the same filesystem
+      log.info("recorder", `finalized → inbox/${st.base}/`);
     } catch (err) {
-      // Drop the encoded temp but keep the raw capture + state: a retry re-encodes from the raw,
+      // Drop the staged folder but keep the raw capture + state: a retry re-encodes from the raw,
       // so an inbox rename failure can't strand the recording (esp. ownscribe's .oa.wav, which
       // the stray-recovery path doesn't pick up).
-      rmSync(tmp, { force: true });
+      rmSync(stageFolder, { recursive: true, force: true });
       log.error("recorder", `${st.base}: inbox rename failed — kept raw capture for retry: ${String(err)}`);
       return { status: "failed" };
     }
     this.cleanupTemps(st);
-    return { status: "moved", path: dest };
+    return { status: "moved", path: join(dest, CANONICAL_RECORDING) };
   }
 
   /** Recover a stray raw capture (meeting-<stamp>.wav, PCM) left in .partial/ when state was lost
@@ -249,15 +264,20 @@ export class MeetingRecorder implements Recorder {
           log.info("recorder", `stray ${name} still growing — leaving for a later sweep`);
           continue; // a live orphan is still writing; recover it once it's done
         }
-        const base = basename(name, ".wav");
-        const tmp = join(dir, `${base}.flac`);
-        if (!(await transcodeToFlac16k(this.cfg, src, tmp))) { rmSync(tmp, { force: true }); continue; }
-        const dest = this.cfg.paths.inboxWav(base);
+        const base = name.slice(0, -".wav".length);
+        // Stage the recording folder in .partial/, then atomic-rename it into inbox/ (same as
+        // the normal finalize path) — the watcher only sees a complete folder.
+        const stageFolder = recordingFolder(dir, base);
+        const stageFlac = join(stageFolder, CANONICAL_RECORDING);
+        rmSync(stageFolder, { recursive: true, force: true });
+        mkdirSync(stageFolder, { recursive: true });
+        if (!(await transcodeToFlac16k(this.cfg, src, stageFlac))) { rmSync(stageFolder, { recursive: true, force: true }); continue; }
+        const dest = recordingFolder(this.cfg.paths.inboxDir, base);
         mkdirSync(this.cfg.paths.inboxDir, { recursive: true });
-        renameSync(tmp, dest);
+        renameSync(stageFolder, dest);
         rmSync(src, { force: true }); // raw PCM consumed (file was quiescent → no live writer)
-        log.info("recorder", `finalized stray recording → inbox/${basename(dest)}`);
-        last = dest;
+        log.info("recorder", `finalized stray recording → inbox/${base}/`);
+        last = join(dest, CANONICAL_RECORDING);
       } catch (err) {
         if (existsSync(src)) log.warn("recorder", `could not finalize ${name}: ${String(err)}`);
       }

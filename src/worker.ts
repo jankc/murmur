@@ -4,6 +4,7 @@
 // overwriting outputs), and uses peek-then-commit so a crash mid-job replays cleanly.
 import type { Config } from "./config.ts";
 import type { Queue, QueueItem } from "./queue.ts";
+import { artifactsFor } from "./paths.ts";
 import { move } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
 import { PauseStore, writeCurrent, clearCurrent, readCurrent } from "./jobstate.ts";
@@ -82,10 +83,11 @@ export class Worker {
     const ac = new AbortController();
     this.current = { ac, job };
     try {
-      // The job is in inbox/ → process it unconditionally, overwriting any prior outputs.
-      // (Re-dropping a wav into inbox is the supported way to reprocess; there are no
-      // transcript/summary existence checks — location is the state.)
-      const txt = this.cfg.paths.transcript(job.basename);
+      // The job is in inbox/<base>/ → process it unconditionally, overwriting any prior outputs.
+      // (Re-dropping a recording into inbox is the supported way to reprocess; there are no
+      // transcript/summary existence checks — location is the state.) Every artifact path is
+      // derived from the recording file the job points at — its folder is its home.
+      const { folder, transcript: txt, summary: summaryPath } = artifactsFor(job.wavPath);
       await writeCurrent(this.cfg, { basename: job.basename, stage: "transcribe", startedAt: Date.now() });
       await transcribe(this.cfg, job, ac.signal);
 
@@ -96,24 +98,26 @@ export class Worker {
       // a vault error is logged but must not fail a job whose summary is already written locally.
       await writeCurrent(this.cfg, { basename: job.basename, stage: "archive", startedAt: Date.now() });
       try {
-        await archiveSummary(this.cfg, job.basename, ac.signal, result);
+        await archiveSummary(this.cfg, folder, job.basename, ac.signal, result);
       } catch (err) {
         if (isAbort(err) || ac.signal.aborted) throw err;
         log.warn("worker", `archive failed for ${job.basename}: ${String(err)}`);
       }
 
-      // Done: the wav's home is now processed/<month>/ — that move IS the "processed"
+      // A no-speech recording produces an empty-marker summary and no vault note. Read it from
+      // the in-folder summary BEFORE the terminal move (which relocates the whole folder), so a
+      // silent capture isn't reported as a misleading "Summary ready".
+      const summaryText = await Bun.file(summaryPath).text().catch(() => "");
+
+      // Done: the folder's home is now processed/<month>/ — that move IS the "processed"
       // signal (the watcher never looks outside inbox/ again).
-      // Dequeue BEFORE the terminal move: if we crash in between, the wav stays in inbox/ and
+      // Dequeue BEFORE the terminal move: if we crash in between, the folder stays in inbox/ and
       // the boot reconcile re-enqueues it (a harmless reprocess) — rather than staying
       // queued-but-already-moved, which would retry a now-missing path and misfile a completed
       // job into failed/.
       await this.queue.commitDequeue(job.basename);
       await move(this.cfg, job.basename, "processed");
       await clearCurrent(this.cfg);
-      // A no-speech recording produces an empty-marker summary and no vault note — surface
-      // that instead of a misleading "Summary ready", so a silent capture isn't mistaken for success.
-      const summaryText = await Bun.file(this.cfg.paths.summary(job.basename)).text().catch(() => "");
       if (summaryText.trimStart().startsWith(EMPTY_MARKER)) {
         log.warn("worker", `${job.basename}: no speech detected — empty summary, no vault note`);
         notify(this.cfg, `⚠️ ${job.basename}: no speech detected (empty recording)`);
