@@ -18,3 +18,9 @@ schema: spec-driven
 #       - Always include a "Non-goals" section
 #     tasks:
 #       - Break tasks into chunks of max 2 hours
+
+rules:
+  proposal:
+    - For sequenced work, prefix the change name with `mur` + a 3-digit ordinal
+      (`mur001-`, `mur002-`) and include a `## Dependencies` section covering Order,
+      Depends on, Blocks, and Status.
