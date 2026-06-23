@@ -52,6 +52,7 @@ export interface Paths {
   pauseFile: string;
   currentFile: string;
   lockFile: string;
+  importLock: string; // single-run lock so a hand-run `murmur import` can't race the scheduled one
   importLedger: string; // `murmur import` dedup cache (id → {size, basename, importedAt})
   failureLog: string;
   // Per-recording derived paths. There's deliberately no processed/failed builder: those folders
@@ -92,6 +93,7 @@ export function buildPaths(base: string): Paths {
     pauseFile: join(stateDir, "pause.json"),
     currentFile: join(stateDir, "current.json"),
     lockFile: join(stateDir, "daemon.lock"),
+    importLock: join(stateDir, "import.lock"),
     importLedger: join(stateDir, "import-ledger.json"),
     failureLog: join(logsDir, "process-failures.log"),
     // .partial/ holds the raw PCM capture — stays WAV (maximally crash-salvageable); it's

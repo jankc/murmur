@@ -102,6 +102,18 @@ murmur logs -f               # tail the daemon logs (out + err)
 ```
 `murmur daemon restart` re-reads an edited plist (`kickstart` alone wouldn't). The daemon's log location is derived from `MEETINGS_BASE` by `launchd/run-daemon.sh` (via `murmur print-env`), so relocating the base needs only a `murmur.toml` edit + `murmur daemon restart`. The plist still hard-codes machine-specific paths — the `bun` mise install in `PATH`, the repo's `run-daemon.sh`, and the `WorkingDirectory` — so **on a new machine (or a different username/repo location) edit those**, and update the `bun` path whenever you reinstall bun.
 
+## The import scheduler (periodic `murmur import`)
+
+If you have `[[sources]]` configured (e.g. Just Press Record via iCloud), a second LaunchAgent runs `murmur import` every 10 minutes — a one-shot poll that pulls any new external recordings into `inbox/` for the daemon to pick up. It is cheap (a glob + `stat` per file — no model, no transcode; iCloud files are materialized on demand) and fully idempotent (ledger + `locate()` backstop), so re-running it — or a hand-run `murmur import` racing a scheduled tick — can never double-import. launchd keeps one instance per label, so scheduled ticks never overlap each other (one running past 10 min just defers the next). It runs once at load, so the first poll doesn't wait 10 minutes. Tail its logs with `murmur logs import`.
+
+```sh
+murmur import install         # render the plist into ~/Library/LaunchAgents/ and start it (also fires once immediately)
+murmur import restart         # re-read an edited plist (bootout + bootstrap)
+murmur import stop            # ( / start )
+```
+
+`murmur import` on its own still runs once, as before — the subcommands only manage the agent. Logs go to `$MEETINGS_BASE/logs/import.{out,err}.log` (same `murmur print-env` trick as the daemon), so relocating the base needs no plist edit — the next tick picks up the new path. The 10-minute cadence is hard-coded in `launchd/com.jank.murmur.import.plist.example` (`StartInterval = 600`); edit it there and re-run `murmur import install` to apply — that re-renders the template and reloads. (`murmur import restart` only reloads the already-installed plist, so it won't pick up template edits.)
+
 ### Control API (`http://127.0.0.1:7461`)
 
 The CLI and SwiftBar talk to this; you can too. Mutating routes (everything but `GET /status`) require a `Content-Type: application/json` header and reject any request carrying an `Origin` — a CSRF guard so a web page can't trigger recording over loopback. `curl` works with `-H 'content-type: application/json'`.

@@ -1,8 +1,8 @@
 // Daemon bootstrap: watcher → persistent queue → serial GPU-aware worker, plus the
 // localhost control API. Shared by the LaunchAgent entry (main.ts) and `murmur daemon`.
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import type { Config } from "./config.ts";
+import { acquirePidLock, releasePidLock } from "./lock.ts";
 import { Queue } from "./queue.ts";
 import { PauseStore } from "./jobstate.ts";
 import { MeetingRecorder } from "./recorder.ts";
@@ -28,7 +28,7 @@ export async function runDaemon(cfg: Config): Promise<void> {
   }
 
   // 2. Single-instance lock (LaunchAgent KeepAlive + a manual run could otherwise double-run).
-  if (!(await acquireLock(cfg))) {
+  if (!acquirePidLock(cfg.paths.lockFile)) {
     log.error("daemon", `another daemon is already running (lock ${cfg.paths.lockFile}); exiting`);
     process.exit(1);
   }
@@ -71,9 +71,7 @@ export async function runDaemon(cfg: Config): Promise<void> {
     worker.shutdown();
     watcher.close();
     server.stop(true);
-    try {
-      rmSync(cfg.paths.lockFile);
-    } catch {}
+    releasePidLock(cfg.paths.lockFile);
     setTimeout(() => process.exit(0), 200);
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
@@ -83,23 +81,6 @@ export async function runDaemon(cfg: Config): Promise<void> {
 
   // 6. Run the worker loop (resolves when shutdown() stops it).
   await worker.loop();
-}
-
-async function acquireLock(cfg: Config): Promise<boolean> {
-  const f = cfg.paths.lockFile;
-  if (existsSync(f)) {
-    const pid = Number(readFileSync(f, "utf8").trim());
-    if (Number.isInteger(pid) && pid > 0) {
-      try {
-        process.kill(pid, 0);
-        return false; // a live daemon holds the lock
-      } catch {
-        /* stale lock — fall through and overwrite */
-      }
-    }
-  }
-  await writeFile(f, String(process.pid));
-  return true;
 }
 
 async function selfCheck(cfg: Config): Promise<void> {

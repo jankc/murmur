@@ -765,6 +765,7 @@ func printUsage() {
         capture              Record audio to a WAV file
         list-apps            Show running applications
         list-devices         Show available audio input devices
+        request-mic          Trigger the microphone permission prompt, then exit
 
     """, stderr)
 }
@@ -940,6 +941,37 @@ func main() {
         }
 
         app.run()
+
+    case "request-mic":
+        // [LOCAL PATCH vs upstream — see capture/README.md] Present the microphone TCC prompt,
+        // then exit. macOS only DISPLAYS a mic prompt to a process that has a window-server
+        // connection and a running run loop — a bare CLI with only a semaphore never surfaces
+        // the dialog (it returns without asking). So we spin up NSApplication and request on the
+        // main run loop, mirroring `capture`. The long-lived `capture` process is detached by
+        // murmur (proc.unref()), which swallows the prompt; running this small command
+        // synchronously in the launcher's own (non-detached) process lets macOS attribute the
+        // prompt to that app, so it can be authorized once. Requires the embedded
+        // NSMicrophoneUsageDescription (see build.sh / Info.plist).
+        let micApp = NSApplication.shared
+        micApp.setActivationPolicy(.accessory)
+        func micPermName(_ p: AVAudioApplication.recordPermission) -> String {
+            switch p {
+            case .granted: return "granted"
+            case .denied: return "denied"
+            case .undetermined: return "undetermined"
+            @unknown default: return "unknown"
+            }
+        }
+        DispatchQueue.main.async {
+            micApp.activate(ignoringOtherApps: true)
+            let before = AVAudioApplication.shared.recordPermission
+            fputs("Microphone permission before request: \(micPermName(before))\n", stderr)
+            AVAudioApplication.requestRecordPermission { granted in
+                fputs("Microphone permission: \(granted ? "granted" : "denied")\n", stderr)
+                exit(granted ? 0 : 3)
+            }
+        }
+        micApp.run()
 
     case "--help", "-h":
         printUsage()

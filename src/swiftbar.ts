@@ -46,6 +46,12 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
   } else {
     lines.push(action("Start recording", "record"));
   }
+  // One-time setup for the ownscribe backend: the capture binary's mic access is attributed to
+  // SwiftBar (the launcher). Run this once and Allow the prompt so menubar recordings capture the
+  // mic instead of silence — without it macOS swallows the prompt on the detached capture.
+  if (cfg.recordBackend === "ownscribe") {
+    lines.push(action("Grant microphone access…", "grant-mic"));
+  }
 
   lines.push(s.current ? `Processing: ${s.current.basename} (${s.current.stage})` : `Queue: ${depth}`);
   if (s.failedCount > 0) {

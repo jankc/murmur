@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Embedded into the ownscribe-audio Mach-O via `-sectcreate __TEXT __info_plist`
+	     (see build.sh). A bare CLI tool has no Info.plist, and macOS will NOT display a
+	     microphone TCC prompt for a process that lacks NSMicrophoneUsageDescription — it
+	     silently denies. Recording from a terminal works only because the terminal already
+	     holds the Microphone grant; launched from a menubar app (SwiftBar) the grant is
+	     undetermined, the prompt is swallowed, and the mic records silence. This usage
+	     string makes the request promptable so the launching app can be granted once. -->
+	<key>CFBundleIdentifier</key>
+	<string>com.jank.murmur.ownscribe-audio</string>
+	<key>CFBundleName</key>
+	<string>ownscribe-audio</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>murmur records your microphone alongside system audio to transcribe meetings locally.</string>
+</dict>
+</plist>

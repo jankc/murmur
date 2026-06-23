@@ -20,13 +20,26 @@ and stops it with SIGINT, then ffmpeg-transcodes the result to 16 kHz s16le.
 - **Pinned commit:** see [`UPSTREAM`](UPSTREAM) — the single source of truth, updated by the sync tooling below
 - **License:** MIT, © 2026 Pascal Berrang — see `LICENSE` (kept per the MIT terms)
 
-`Sources/AudioCapture.swift` tracks upstream with **one local patch**: a `--max-duration N`
-flag (a one-shot timer that fires the normal merge+exit), so a `murmur record` capture
-self-caps like the ffmpeg backend without depending on the daemon — search the file for
-`LOCAL PATCH`. The only change from upstream `swift/build.sh` is `BIN_DIR` → `capture/bin/`
-(gitignored), so the artifact lands next to its source. Upstream's `Package.swift` is
-**not** vendored: it under-links frameworks (only CoreAudio + AudioToolbox) and `swift build`
-fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
+`Sources/AudioCapture.swift` tracks upstream with **two local patches** (search the file for
+`LOCAL PATCH`):
+
+1. A `--max-duration N` flag (a one-shot timer that fires the normal merge+exit), so a
+   `murmur record` capture self-caps like the ffmpeg backend without depending on the daemon.
+2. A `request-mic` subcommand that triggers the microphone TCC prompt and exits. macOS will
+   only *show* a mic prompt for a process that declares `NSMicrophoneUsageDescription`, and
+   only attribute it to the launching app when the request is **not** detached. The recorder
+   detaches the long-lived capture (`proc.unref()`), so a launcher that lacks the grant (e.g.
+   the SwiftBar menubar) silently records a **silent mic**. `murmur grant-mic` runs this
+   subcommand synchronously in the launcher's own process so the prompt appears and the app
+   can be authorized once. See [`Info.plist`](Info.plist).
+
+`build.sh` deviates from upstream `swift/build.sh` in two ways: `BIN_DIR` → `capture/bin/`
+(gitignored, so the artifact lands next to its source), and it embeds [`Info.plist`](Info.plist)
+into the binary via `-sectcreate __TEXT __info_plist` then re-signs ad-hoc — without that
+embedded `NSMicrophoneUsageDescription`, the mic prompt can never be shown (patch 2 above).
+Upstream's `Package.swift` is **not** vendored: it under-links frameworks (only CoreAudio +
+AudioToolbox) and `swift build` fails — `build.sh`'s direct `swiftc` call is the real,
+supported build path.
 
 ## Keeping in sync
 
@@ -39,10 +52,12 @@ fails — `build.sh`'s direct `swiftc` call is the real, supported build path.
   and opens an issue when upstream moves past the pinned commit. Delete it if unwanted.
 
 `LICENSE` tracks upstream verbatim. `Sources/AudioCapture.swift` carries the local
-`--max-duration` patch and `build.sh` deviates on `BIN_DIR`, so after a sync **re-apply the
-patch** (search `LOCAL PATCH`); `scripts/sync-capture.sh` warns about this on `--apply`. If
-the patch is ever lost, `murmur record` fails loudly with `Unknown option: --max-duration`
-rather than silently dropping the cap.
+`--max-duration` and `request-mic` patches and `build.sh` deviates on `BIN_DIR` + the
+`Info.plist` embedding, so after a sync **re-apply the patches** (search `LOCAL PATCH`);
+`scripts/sync-capture.sh` warns about this on `--apply`. If the `--max-duration` patch is ever
+lost, `murmur record` fails loudly with `Unknown option: --max-duration` rather than silently
+dropping the cap; if the `Info.plist`/`request-mic` patch is lost, menubar-launched recordings
+silently lose the mic again.
 
 After any sync, redeploy the binary: `cp capture/bin/ownscribe-audio ~/.local/bin/`.
 
@@ -54,4 +69,8 @@ cp capture/bin/ownscribe-audio ~/.local/bin/       # the default OWNSCRIBE_BIN p
 ```
 
 Requires the Xcode Command Line Tools (`xcode-select --install`) and macOS 14.2+.
-First run prompts for Screen Recording (and, with `--mic`, Microphone) permission.
+First run prompts for Screen Recording (and, with `--mic`, Microphone) permission — but the
+mic prompt is attributed to the **launching app**. From a terminal that already has Microphone
+access it just works; launched from the **SwiftBar menubar** the prompt is swallowed (detached
+capture), so run **`murmur grant-mic`** once from the menubar item and Allow the prompt. The
+grant then sticks to SwiftBar and every later menubar recording captures the mic.

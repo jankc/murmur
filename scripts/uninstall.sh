@@ -3,11 +3,11 @@ set -euo pipefail
 # Remove murmur's installed bits. Leaves your data, config, venv, and the ownscribe binary
 # in place (remove those by hand if you really want them gone — see the note below).
 
-LABEL="com.jank.murmur.daemon"
-
-echo "==> stopping + removing the daemon"
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || echo "    (daemon was not loaded)"
-rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
+echo "==> stopping + removing the LaunchAgents (daemon + import)"
+for LABEL in com.jank.murmur.daemon com.jank.murmur.import; do
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || echo "    ($LABEL was not loaded)"
+  rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
+done
 
 echo "==> removing the CLI symlink"
 rm -f "$HOME/.local/bin/murmur"

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jank.murmur.import</string>
+
+  <!-- Template rendered by `murmur import install`: __REPO__, __HOME__, and __BUN_DIR__
+       are substituted from the running environment, so there are no hand-edited machine
+       paths. Edit this template, not the installed ~/Library/LaunchAgents copy. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO__/launchd/run-import.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__/src</string>
+
+  <!-- One-shot: fire every 10 minutes, and once at load. No KeepAlive — `murmur import`
+       runs to completion and exits; launchd re-fires it on the next interval. launchd keeps
+       at most one instance per label, so a tick that comes due while the previous run is
+       still going won't start a second copy (it fires once the prior run exits) — scheduled
+       ticks never overlap each other. launchd also coalesces ticks during sleep and fires
+       once on wake. (Concurrent safety against a hand-run `murmur import` rests on the import
+       engine's own idempotency: ledger + locate() backstop.) -->
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>600</integer>
+
+  <!-- run-import.sh also prepends the mise shims, so bun resolves even if this entry goes
+       stale. `murmur import` is a pure producer — its only external dependency is brctl
+       (/usr/bin, for iCloud materialize); no ffmpeg/ollama/python/terminal-notifier needed. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__BUN_DIR__:__HOME__/.local/share/mise/shims:__HOME__/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <!-- No StandardOut/ErrorPath: run-import.sh redirects the job's stdout/stderr to
+       $MEETINGS_BASE/logs/import.{out,err}.log, from the resolved config (`murmur print-env`). -->
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

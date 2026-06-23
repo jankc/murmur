@@ -14,6 +14,7 @@ import { copyFile, rename } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type { Config } from "./config.ts";
 import { readJson, writeJsonAtomic } from "./state.ts";
+import { acquirePidLock, releasePidLock } from "./lock.ts";
 import { loadSources, enumerate } from "./sources.ts";
 import { ensureLocal } from "./materialize.ts";
 import { isRecordingFile } from "./paths.ts";
@@ -38,6 +39,8 @@ export interface SourceSummary {
 }
 export interface ImportSummary {
   sources: SourceSummary[];
+  /** True when another `murmur import` already held the lock — this run did nothing. */
+  skipped?: boolean;
 }
 
 /** A candidate is new (worth importing) when the ledger has never seen its id, or has seen it
@@ -58,6 +61,24 @@ export async function runImport(cfg: Config): Promise<ImportSummary> {
     log.info("import", "no enabled sources (see murmur.toml [[sources]]) — nothing to do");
     return { sources: [] };
   }
+
+  // One import at a time. A hand-run `murmur import` and the launchd tick share the ledger and
+  // the import scratch dir, so overlapping runs would clobber each other; if another run holds
+  // the lock it's already doing the work, so skip — the next tick catches anything new. The
+  // caller reports the skip; we just signal it.
+  if (!acquirePidLock(cfg.paths.importLock)) {
+    return { sources: [], skipped: true };
+  }
+  try {
+    return await importSources(cfg, sources);
+  } finally {
+    releasePidLock(cfg.paths.importLock);
+  }
+}
+
+/** The actual feed — always called while holding the import lock: scan each source, copy new
+ *  files into inbox/, and persist the ledger once at the end. */
+async function importSources(cfg: Config, sources: ReturnType<typeof loadSources>): Promise<ImportSummary> {
   mkdirSync(cfg.paths.inboxDir, { recursive: true });
   mkdirSync(cfg.paths.importTmpDir, { recursive: true });
 
