@@ -30,6 +30,13 @@ model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.
 # language = "auto"                # auto-detect per recording; set "cs"/"en"/… to force.
                                    # Forcing a language drops speech in OTHER languages — leave on
                                    # auto for bilingual (e.g. cs+en) meetings.
+# trim_silence = true              # trim leading/trailing near-silence before transcribing, so
+                                   # language auto-detect sees real speech (a silent lead-in is
+                                   # otherwise mis-detected as English) and whisper doesn't
+                                   # hallucinate over it. Timestamps stay anchored to the original.
+# trim_threshold_db = -30          # dBFS below which audio counts as silence for the trim. Lower
+                                   # (e.g. -40) trims only true silence; higher risks clipping a
+                                   # very soft first/last word. Only the ends are trimmed.
 # python = "~/.local/share/murmur/asr-venv/bin/python"   # asr venv python
 # Diarization (speaker labels) — OFF by default. Needs a HuggingFace token + accepting the
 # pyannote community-1 terms; the asr venv already has pyannote.audio.

@@ -2,10 +2,11 @@
 // mlx-whisper and pyannote community-1 in a single venv, emitting JSON. murmur keeps the
 // orchestration and the (tested) chunk↔turn merge. The helper reads the wav read-only, so
 // there's no scratch/rename/locate dance — we just parse stdout and write transcripts/<base>.txt.
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { openSync, closeSync, mkdirSync, writeSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Config } from "../config.ts";
 import type { QueueItem } from "../queue.ts";
 import { log } from "../log.ts";
@@ -30,27 +31,149 @@ interface AsrOutput {
 
 export async function transcribe(cfg: Config, job: QueueItem, signal: AbortSignal): Promise<string> {
   const wantDiarize = cfg.diarize && !!cfg.hfToken;
-  const out = await runAsr(cfg, job.basename, job.wavPath, signal, wantDiarize);
+  // Trim leading/trailing near-silence into a temp before ASR (when enabled). This keeps
+  // whisper's first-30s language auto-detect on real speech (a silent lead-in otherwise gets
+  // mis-detected as English) and avoids it hallucinating over the quiet head/tail. `offset` is
+  // how much head was removed, added back below so timestamps stay anchored to the original.
+  const trimmed = cfg.trimSilence
+    ? await trimSilence(cfg, job.wavPath, job.basename, signal)
+    : { path: job.wavPath, offset: 0, cleanup: async () => {} };
 
-  const dest = cfg.paths.transcript(job.basename);
-  await mkdir(cfg.paths.transcriptsDir, { recursive: true });
+  try {
+    const out = await runAsr(cfg, job.basename, trimmed.path, signal, wantDiarize);
+    if (trimmed.offset > 0) reanchor(out, trimmed.offset);
 
-  let text: string;
-  if (out.chunks.length === 0) {
-    // No speech — emit an empty transcript so the summary prompt returns its
-    // "prázdný/testovací" one-liner instead of erroring (empty-marker path).
-    log.warn("asr", `${job.basename}: no transcript produced (no speech?) — writing empty transcript`);
-    text = "";
-  } else if (wantDiarize && out.turns.length > 0) {
-    text = assignSpeakers(out.chunks, out.turns);
-  } else {
-    // Diarization off, or it failed (helper returns empty turns) — degrade to plain
-    // text rather than losing the meeting.
-    if (wantDiarize) log.warn("asr", `${job.basename}: no speaker turns — writing plain transcript`);
-    text = out.chunks.map((c) => c.text.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim() + "\n";
+    const dest = cfg.paths.transcript(job.basename);
+    await mkdir(cfg.paths.transcriptsDir, { recursive: true });
+
+    let text: string;
+    if (out.chunks.length === 0) {
+      // No speech — emit an empty transcript so the summary prompt returns its
+      // "prázdný/testovací" one-liner instead of erroring (empty-marker path).
+      log.warn("asr", `${job.basename}: no transcript produced (no speech?) — writing empty transcript`);
+      text = "";
+    } else if (wantDiarize && out.turns.length > 0) {
+      text = assignSpeakers(out.chunks, out.turns);
+    } else {
+      // Diarization off, or it failed (helper returns empty turns) — degrade to plain
+      // text rather than losing the meeting.
+      if (wantDiarize) log.warn("asr", `${job.basename}: no speaker turns — writing plain transcript`);
+      text = out.chunks.map((c) => c.text.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim() + "\n";
+    }
+    await Bun.write(dest, text);
+    return dest;
+  } finally {
+    await trimmed.cleanup();
   }
-  await Bun.write(dest, text);
-  return dest;
+}
+
+/** Shift every chunk/turn timestamp by `offset` seconds — re-anchoring a trimmed-audio timeline
+ *  back onto the original recording so transcript timestamps match wall-clock. Shifting chunks
+ *  and turns together preserves their overlap, so speaker assignment is unaffected. */
+function reanchor(out: AsrOutput, offset: number): void {
+  for (const c of out.chunks) { c.start += offset; c.end += offset; }
+  for (const t of out.turns) { t.start += offset; t.end += offset; }
+}
+
+// Require this many continuous seconds of sound before the trim stops — short blips in an
+// otherwise-quiet lead-in (breaths, keyboard, a cough) don't prematurely end the head/tail trim.
+const TRIM_MIN_SOUND_S = 2;
+
+interface Trimmed {
+  path: string; // file ASR should read (trimmed temp, or the original on fallback)
+  offset: number; // seconds removed from the head — added back to timestamps via reanchor()
+  cleanup: () => Promise<void>;
+}
+
+/** Run ffmpeg with stderr appended to the per-job asr log; resolves to its exit code. */
+async function ffmpeg(args: string[], cfg: Config, logPath: string, signal: AbortSignal): Promise<number> {
+  const logFd = openSync(logPath, "a");
+  const proc = Bun.spawn(["ffmpeg", "-hide_banner", "-nostdin", "-y", ...args], {
+    env: { ...process.env, PATH: cfg.childPath },
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: logFd,
+  });
+  const onAbort = () => { try { proc.kill("SIGKILL"); } catch {} };
+  if (signal.aborted) onAbort();
+  else signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await proc.exited;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    try { closeSync(logFd); } catch {}
+  }
+}
+
+/** Audio duration in seconds via ffprobe, or null if unreadable. */
+async function probeDuration(cfg: Config, file: string): Promise<number | null> {
+  const proc = Bun.spawn(
+    ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nk=1:nw=1", file],
+    { env: { ...process.env, PATH: cfg.childPath }, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+  );
+  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (code !== 0) return null;
+  const n = Number(out.trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Trim leading + trailing near-silence into a 16 kHz mono temp wav for ASR, returning the head
+ *  offset so the caller can re-anchor timestamps. Only the ends are trimmed — internal pauses are
+ *  preserved (the `areverse` sandwich), so the timeline (and diarization) stays intact. Any
+ *  failure falls back to the original file (offset 0): trimming must never lose a meeting. */
+async function trimSilence(cfg: Config, src: string, label: string, signal: AbortSignal): Promise<Trimmed> {
+  const noop: Trimmed = { path: src, offset: 0, cleanup: async () => {} };
+  const logPath = join(cfg.paths.logsDir, `asr-${label}.log`);
+  mkdirSync(cfg.paths.logsDir, { recursive: true });
+
+  const headFilter = `silenceremove=start_periods=1:start_threshold=${cfg.trimThresholdDb}dB:start_duration=${TRIM_MIN_SOUND_S}`;
+  const tailFilter = `areverse,${headFilter},areverse`;
+  const wav = ["-ar", "16000", "-ac", "1"]; // what whisper/pyannote want anyway
+  const stamp = `${label}.${process.pid}`;
+  const headTmp = join(tmpdir(), `murmur-trim-${stamp}-head.wav`);
+  const finalTmp = join(tmpdir(), `murmur-trim-${stamp}.wav`);
+  const rmTmp = (f: string) => rm(f, { force: true }).catch(() => {});
+  const abortIfCancelled = () => { if (signal.aborted) throw new AbortError("asr trim aborted"); };
+
+  try {
+    const origDur = await probeDuration(cfg, src);
+    if (origDur === null) {
+      log.warn("asr", `${label}: trim skipped — could not probe ${src}`);
+      return noop;
+    }
+
+    // 1. Head-only trim → its duration gives the exact head offset (origDur − headDur). Keeping
+    //    this a separate pass is what lets us measure the head cut precisely; the tail pass below
+    //    operates on this file, so the offset stays valid.
+    if ((await ffmpeg(["-i", src, "-af", headFilter, ...wav, headTmp], cfg, logPath, signal)) !== 0) {
+      abortIfCancelled();
+      log.warn("asr", `${label}: head trim failed — using untrimmed audio`);
+      await rmTmp(headTmp);
+      return noop;
+    }
+    const headDur = await probeDuration(cfg, headTmp);
+    if (headDur === null) { await rmTmp(headTmp); return noop; }
+    const offset = Math.max(0, origDur - headDur);
+
+    // 2. Trailing-silence trim on the head-trimmed file (leaves the head, hence `offset`, intact).
+    //    If it fails we still transcribe the head-trimmed audio — the head fix is the important one.
+    if ((await ffmpeg(["-i", headTmp, "-af", tailFilter, ...wav, finalTmp], cfg, logPath, signal)) !== 0) {
+      abortIfCancelled();
+      log.warn("asr", `${label}: tail trim failed — transcribing head-trimmed audio (head +${offset.toFixed(1)}s)`);
+      await rmTmp(finalTmp);
+      return { path: headTmp, offset, cleanup: () => rmTmp(headTmp) };
+    }
+    await rmTmp(headTmp);
+    const finalDur = await probeDuration(cfg, finalTmp);
+    log.info("asr", `${label}: trimmed silence — head +${offset.toFixed(1)}s, ${origDur.toFixed(0)}s → ${(finalDur ?? 0).toFixed(0)}s`);
+    return { path: finalTmp, offset, cleanup: () => rmTmp(finalTmp) };
+  } catch (err) {
+    await rmTmp(headTmp);
+    await rmTmp(finalTmp);
+    if (isAbort(err) || signal.aborted) throw err;
+    log.warn("asr", `${label}: trim error (${String(err)}) — using untrimmed audio`);
+    return noop;
+  }
 }
 
 /** Spawn the asr helper on a wav and parse its JSON ({language, chunks, turns}). stderr is

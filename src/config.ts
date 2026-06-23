@@ -17,6 +17,8 @@ export interface Config {
   pythonBin: string; // python of the asr venv
   asrModel: string; // mlx-whisper model (hf repo)
   language: string;
+  trimSilence: boolean; // trim leading/trailing near-silence before ASR (keeps language auto-detect on real speech)
+  trimThresholdDb: number; // dBFS below which audio counts as silence for the head/tail trim
   diarize: boolean;
   numSpeakers: number; // hint for diarization; 0 = auto-detect
   hfToken: string;
@@ -51,6 +53,8 @@ const KEYS = [
   "MURMUR_PYTHON",
   "ASR_MODEL",
   "ASR_LANG",
+  "TRIM_SILENCE",
+  "TRIM_THRESHOLD_DB",
   "DIARIZE",
   "DIARIZE_NUM_SPEAKERS",
   "HF_TOKEN",
@@ -99,6 +103,8 @@ function tomlToRawEnv(toml: Record<string, any>): RawEnv {
     MURMUR_PYTHON: path(asr.python),
     ASR_MODEL: asr.model,
     ASR_LANG: asr.language,
+    TRIM_SILENCE: bool(asr.trim_silence),
+    TRIM_THRESHOLD_DB: asr.trim_threshold_db,
     DIARIZE: bool(asr.diarize),
     DIARIZE_NUM_SPEAKERS: asr.num_speakers,
     HF_TOKEN: asr.hf_token,
@@ -167,6 +173,8 @@ export function loadConfig(repoDir: string = REPO_DIR): Config {
     pythonBin,
     asrModel: pick("ASR_MODEL", "mlx-community/whisper-large-v3-turbo"),
     language: pick("ASR_LANG", "auto"), // "auto" = let whisper detect; forcing a wrong language drops that speech
+    trimSilence: truthy(pick("TRIM_SILENCE", "1")), // on by default — makes "auto" robust to a silent lead-in
+    trimThresholdDb: num("TRIM_THRESHOLD_DB", -30),
     diarize: truthy(pick("DIARIZE", "0")),
     numSpeakers: num("DIARIZE_NUM_SPEAKERS", 0),
     hfToken: pick("HF_TOKEN", ""),
@@ -202,6 +210,8 @@ export function configAsEnv(cfg: Config): Record<string, string> {
     MURMUR_PYTHON: cfg.pythonBin,
     ASR_MODEL: cfg.asrModel,
     ASR_LANG: cfg.language,
+    TRIM_SILENCE: cfg.trimSilence ? "1" : "0",
+    TRIM_THRESHOLD_DB: String(cfg.trimThresholdDb),
     DIARIZE: cfg.diarize ? "1" : "0",
     DIARIZE_NUM_SPEAKERS: String(cfg.numSpeakers),
     HF_TOKEN: cfg.hfToken,

@@ -122,6 +122,14 @@ function shQuote(s: string): string {
 }
 
 const DAEMON_LABEL = "com.jank.murmur.daemon";
+const IMPORT_LABEL = "com.jank.murmur.import";
+
+// The lifecycle verbs every murmur LaunchAgent understands. One source of truth for both the
+// `launchctlManage` action type and the `murmur <daemon|import> <sub>` dispatch guards.
+const LAUNCH_ACTIONS = ["start", "stop", "restart", "install"] as const;
+type LaunchAction = (typeof LAUNCH_ACTIONS)[number];
+const isLaunchAction = (s: string | undefined): s is LaunchAction =>
+  (LAUNCH_ACTIONS as readonly string[]).includes(s as string);
 
 /** Enqueue a resolved wav via the daemon, or process it inline when the daemon is down. */
 async function dispatchWav(wav: string): Promise<void> {
@@ -136,46 +144,104 @@ async function dispatchWav(wav: string): Promise<void> {
   }
 }
 
+/** Re-run one recording inline without colliding with a running daemon. Unlike `dispatchWav`,
+ *  this never hands the job to the daemon — it runs in *this* process so the invoking
+ *  environment's config wins (e.g. `ASR_LANG=cs murmur reprocess …` to fix a mis-detected
+ *  language; the daemon would use its own ASR_LANG). The daemon owns a single serial GPU worker,
+ *  so to avoid running a second transcribe/diarize alongside its job we soft-pause that worker
+ *  (which lets any in-flight job finish and blocks new ones), wait for it to drain, run, then
+ *  restore the prior pause state. A Ctrl-C mid-run restores it too, so an interrupt can't leave
+ *  the daemon stuck paused. With the daemon down there's nothing to coordinate. */
+async function reprocessInline(wav: string): Promise<void> {
+  const runAndReport = async () => {
+    const { txt, md } = await runInline(wav);
+    console.log(`transcript: ${txt}`);
+    console.log(`summary:    ${md}`);
+  };
+
+  if (!(await daemonUp())) {
+    await runAndReport();
+    return;
+  }
+
+  const snapshot = (): Promise<StatusSnapshot | null> =>
+    daemonGet("/status").then((r) => r.json() as Promise<StatusSnapshot>).catch(() => null);
+
+  const prior = (await snapshot())?.pause ?? "none";
+  const weHold = prior === "none"; // never clobber a pause the user set themselves
+  const restore = () => (weHold ? daemonPost("/resume").then(() => {}, () => {}) : Promise.resolve());
+
+  const onSigint = () => void restore().finally(() => process.exit(130));
+  process.once("SIGINT", onSigint);
+  try {
+    if (weHold) await daemonPost("/pause", { mode: "soft" }).catch(() => {});
+    let announced = false;
+    for (;;) {
+      const snap = await snapshot();
+      if (!snap || !snap.current) break; // daemon idle (or gone) — safe to run inline
+      if (!announced) {
+        console.error(`daemon busy with ${snap.current.basename} — waiting for it to finish…`);
+        announced = true;
+      }
+      await sleep(1000);
+    }
+    await runAndReport();
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+    await restore();
+  }
+}
+
 async function launchctl(...args: string[]): Promise<{ ok: boolean; out: string }> {
   const p = Bun.spawn(["launchctl", ...args], { stdout: "pipe", stderr: "pipe" });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   return { ok: (await p.exited) === 0, out: (out + err).trim() };
 }
 
-/** Manage the launchd daemon so config/plist changes don't need raw launchctl. `restart`
+/** Manage a murmur LaunchAgent so config/plist changes don't need raw launchctl. `restart`
  *  re-reads an edited plist (bootout + bootstrap — `kickstart` alone would not); `install`
- *  copies the repo plist into ~/Library/LaunchAgents first. */
-async function daemonctl(cfg: Config, action: "start" | "stop" | "restart" | "install"): Promise<void> {
-  const domain = `gui/${userInfo().uid}`;
-  const target = `${domain}/${DAEMON_LABEL}`;
-  const installed = join(userInfo().homedir, "Library/LaunchAgents", `${DAEMON_LABEL}.plist`);
+ *  copies the repo plist template into ~/Library/LaunchAgents first (rendering __REPO__,
+ *  __HOME__, __BUN_DIR__ from this process so there's nothing to hand-edit).
+ *
+ *  Shared by the daemon and the import scheduler — the two jobs differ only in label and
+ *  template name; their lifecycle (start/stop/restart/install) is identical. */
+async function launchctlManage(
+  cfg: Config,
+  label: string,
+  action: LaunchAction,
+  noun: string,
+): Promise<void> {
+  const { uid, homedir } = userInfo();
+  const domain = `gui/${uid}`;
+  const target = `${domain}/${label}`;
+  const installed = join(homedir, "Library/LaunchAgents", `${label}.plist`);
   const bootstrap = () => launchctl("bootstrap", domain, installed);
 
   if (action === "install") {
-    const tmpl = join(cfg.repoDir, "launchd", `${DAEMON_LABEL}.plist.example`);
+    const tmpl = join(cfg.repoDir, "launchd", `${label}.plist.example`);
     if (!existsSync(tmpl)) die(`plist template not found: ${tmpl}`);
     // Render the machine paths from the running environment (process.execPath is this very
-    // bun) so there's nothing to hand-edit; run-daemon.sh derives the log path via print-env.
+    // bun) so there's nothing to hand-edit; run-{daemon,import}.sh derives the log path via print-env.
     const rendered = readFileSync(tmpl, "utf8")
       .replaceAll("__REPO__", cfg.repoDir)
-      .replaceAll("__HOME__", userInfo().homedir)
+      .replaceAll("__HOME__", homedir)
       .replaceAll("__BUN_DIR__", dirname(process.execPath));
     mkdirSync(dirname(installed), { recursive: true });
     writeFileSync(installed, rendered);
     console.log(`installed → ${installed}`);
   } else if (!existsSync(installed)) {
-    die(`daemon not installed (${installed} missing) — run: murmur daemon install`);
+    die(`${noun} not installed (${installed} missing) — run: murmur ${noun} install`);
   }
 
   if (action === "stop") {
     const r = await launchctl("bootout", target);
-    console.log(r.ok ? "daemon stopped" : `not running (${r.out || "no such service"})`);
+    console.log(r.ok ? `${noun} stopped` : `not running (${r.out || "no such service"})`);
     return;
   }
   if (action === "start") {
     const r = await bootstrap();
     if (!r.ok) die(`start failed: ${r.out || "already running?"}`);
-    console.log("daemon started");
+    console.log(`${noun} started`);
     return;
   }
   // restart / install → bootstrap, after booting out any loaded instance.
@@ -183,8 +249,13 @@ async function daemonctl(cfg: Config, action: "start" | "stop" | "restart" | "in
   await sleep(300);
   const r = await bootstrap();
   if (!r.ok) die(`bootstrap failed: ${r.out}`);
-  console.log(action === "install" ? "daemon installed and started" : "daemon restarted");
+  console.log(action === "install" ? `${noun} installed and started` : `${noun} restarted`);
 }
+
+const daemonctl = (cfg: Config, action: LaunchAction) =>
+  launchctlManage(cfg, DAEMON_LABEL, action, "daemon");
+const importctl = (cfg: Config, action: LaunchAction) =>
+  launchctlManage(cfg, IMPORT_LABEL, action, "import");
 
 const USAGE = `murmur — local meeting recorder / transcriber / summarizer
 
@@ -192,9 +263,14 @@ Usage: murmur <command> [args]
 
   record [--device N]      start recording (system audio + your mic)
   stop                     stop the current recording
+  grant-mic                trigger the microphone permission prompt for the launching app
+                           (ownscribe backend; run it once from the menubar — see README)
   process [audio]          transcribe + summarize (newest, or by path/basename)
-  import                   pull new recordings from external sources (see murmur.toml) into inbox/
-  reprocess <name>         re-run the pipeline for one recording (incl. from failed/)
+  import [<sub>]           pull new recordings from external sources into inbox/
+                           (sub: install|start|stop|restart manages the periodic LaunchAgent)
+  reprocess <name>         re-run the pipeline for one recording inline (incl. from
+                           failed/ or processed/); honors env overrides like ASR_LANG,
+                           coordinating with the daemon so it never double-runs the GPU
   retry-failed             re-enqueue every recording in recordings/failed/
   purge [--apply]          find empty/junk recordings & delete all their artifacts (dry-run without --apply)
   transcribe [audio]       transcribe only → prints transcript path
@@ -203,7 +279,7 @@ Usage: murmur <command> [args]
   pause [hard]             pause processing (soft = finish current; hard = abort + requeue)
   resume                   resume processing
   doctor                   check setup (venv, ffmpeg, ollama+model, ownscribe, …) → non-zero on problems
-  logs [failures] [-f]     tail the daemon logs (or process-failures.log); -f to follow
+  logs [failures|import] [-f]  tail daemon logs (or process-failures.log / import logs); -f to follow
   daemon <sub>             run | start | stop | restart | install (manage the LaunchAgent)
   print-env                resolved config as shell exports (used by run-daemon.sh)
 
@@ -213,7 +289,7 @@ switch (cmd) {
   case "daemon": {
     const sub = rest[0];
     if (sub === undefined || sub === "run") await runDaemon(cfg);
-    else if (sub === "start" || sub === "stop" || sub === "restart" || sub === "install") await daemonctl(cfg, sub);
+    else if (isLaunchAction(sub)) await daemonctl(cfg, sub);
     else die(`unknown: murmur daemon ${sub} (run|start|stop|restart|install)`);
     break;
   }
@@ -232,6 +308,33 @@ switch (cmd) {
     console.log(r.message);
     if (!r.ok) process.exit(1);
     break;
+  }
+
+  case "grant-mic": {
+    // Trigger the microphone TCC prompt in THIS process — a child of whatever launched the CLI
+    // (e.g. the SwiftBar menubar) — and run it SYNCHRONOUSLY (no unref/detach). The recorder
+    // detaches the long-lived capture, which makes macOS swallow the prompt; a launcher without
+    // the Microphone grant then records a silent mic. Running the request inline lets macOS
+    // attribute the prompt to the launching app so it can be authorized once. Never proxied to
+    // the daemon (it's detached under launchd — the prompt would be swallowed there too).
+    if (cfg.recordBackend !== "ownscribe") {
+      die("grant-mic applies to the ownscribe backend; the ffmpeg backend uses the launching app's avfoundation permission directly");
+    }
+    if (!existsSync(cfg.ownscribeBin)) die(`ownscribe-audio not found at ${cfg.ownscribeBin}`);
+    const proc = Bun.spawnSync([cfg.ownscribeBin, "request-mic"], {
+      env: { ...process.env, PATH: cfg.childPath },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const out = `${proc.stdout?.toString() ?? ""}${proc.stderr?.toString() ?? ""}`.trim();
+    // Mirror to a log file: launched from the SwiftBar menubar (terminal=false) there's no
+    // visible output, so this is the only way to see whether the prompt ran / what TCC said.
+    try {
+      mkdirSync(cfg.paths.logsDir, { recursive: true });
+      writeFileSync(join(cfg.paths.logsDir, "grant-mic.log"),
+        `[${new Date().toISOString()}] exit=${proc.exitCode}\n${out}\n`, { flag: "a" });
+    } catch {}
+    if (out) console.log(out);
+    process.exit(proc.exitCode ?? 1);
   }
 
   case "status": {
@@ -315,12 +418,14 @@ switch (cmd) {
   }
 
   case "logs": {
-    const which = positional(); // "failures" → process-failures.log; else the daemon logs
+    const which = positional(); // "failures" → process-failures.log; "import" → import logs; else daemon
     const follow = rest.includes("-f") || rest.includes("--follow");
     const files =
       which === "failures"
         ? [cfg.paths.failureLog]
-        : [join(cfg.paths.logsDir, "daemon.out.log"), join(cfg.paths.logsDir, "daemon.err.log")];
+        : which === "import"
+          ? [join(cfg.paths.logsDir, "import.out.log"), join(cfg.paths.logsDir, "import.err.log")]
+          : [join(cfg.paths.logsDir, "daemon.out.log"), join(cfg.paths.logsDir, "daemon.err.log")];
     const existing = files.filter((f) => existsSync(f));
     if (existing.length === 0) {
       console.log(`no logs yet under ${cfg.paths.logsDir}`);
@@ -340,9 +445,23 @@ switch (cmd) {
   }
 
   case "import": {
+    // Subcommand (install|start|stop|restart) manages the periodic LaunchAgent — same
+    // surface as `murmur daemon <sub>`. Bare `murmur import` runs once; an unrecognized sub
+    // is an error, not a silent fall-through to a poll (else a typo'd `install`/`restart`
+    // would look like it set up the scheduler when it only ran one import).
+    const sub = rest[0];
+    if (isLaunchAction(sub)) {
+      await importctl(cfg, sub);
+      break;
+    }
+    if (sub !== undefined) die(`unknown: murmur import ${sub} (install|start|stop|restart) — or bare \`murmur import\` to run once`);
     // Pure producer: pull new external recordings into inbox/. The daemon's watcher (or the
     // next boot's reconcile) picks them up exactly like a normal recording.
-    const summary = await runImport(cfg);
+    const summary = await runImport(cfg).catch((e) => die(`import failed: ${String(e)}`));
+    if (summary.skipped) {
+      console.log("another `murmur import` is already running — skipped this run");
+      break;
+    }
     if (summary.sources.length === 0) {
       console.log("no enabled sources — add a [[sources]] block to murmur.toml (see murmur.toml.example)");
       break;
@@ -368,7 +487,7 @@ switch (cmd) {
     if (!arg) die("usage: murmur reprocess <name|path>");
     const wav = await resolveWav(cfg, arg);
     if (!wav) die(`recording not found: ${arg}`);
-    try { await dispatchWav(wav); } catch (e) { die(`processing failed: ${String(e)}`); }
+    try { await reprocessInline(wav); } catch (e) { die(`processing failed: ${String(e)}`); }
     break;
   }
 
