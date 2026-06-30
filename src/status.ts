@@ -4,7 +4,7 @@ import { readdirSync } from "node:fs";
 import type { Config } from "./config.ts";
 import type { Recorder } from "./recorder.ts";
 import { MeetingRecorder } from "./recorder.ts";
-import { PauseStore, readCurrent, type PauseMode, type CurrentJob } from "./jobstate.ts";
+import { PauseStore, readCurrent, readMeetingDetected, type PauseMode, type CurrentJob, type MeetingState } from "./jobstate.ts";
 import { readJson } from "./state.ts";
 import type { QueueItem } from "./queue.ts";
 
@@ -16,6 +16,7 @@ export interface StatusSnapshot {
   queue: string[]; // basenames
   current: CurrentJob | null;
   failedCount: number; // recordings parked in recordings/failed/
+  meeting: MeetingState | null; // a detected, not-yet-recorded meeting (mur003); null when none/stale
 }
 
 export async function statusSnapshot(
@@ -32,6 +33,7 @@ export async function statusSnapshot(
     queue: queueItems.map((i) => i.basename),
     current: await readCurrent(cfg),
     failedCount: countFailed(cfg),
+    meeting: await readMeetingDetected(cfg),
   };
 }
 
@@ -75,5 +77,6 @@ export function renderStatus(s: StatusSnapshot & { daemon?: string }): string {
     `queue:     ${s.queueDepth}${s.queueDepth > 0 ? " — " + s.queue.join(", ") : ""}`,
   ];
   if (s.failedCount > 0) lines.push(`failed:    ${s.failedCount} (run: murmur retry-failed)`);
+  if (s.meeting && !s.recording) lines.push(`meeting:   detected${s.meeting.app ? ` (${s.meeting.app})` : ""} — run: murmur record`);
   return lines.join("\n");
 }

@@ -41,6 +41,9 @@ export const ARTIFACTS = {
   transcript: "transcript.txt",
   summary: "summary.md",
   asrLog: "asr.log",
+  // Optional free-form user context (who SPEAKER_NN is, the topic, acronyms). Written by the CLI's
+  // --context flag and injected by summarize() into the summary prompt only. Absent for most.
+  context: "context.md",
 } as const;
 
 /** Absolute path of a recording's folder within a given lifecycle dir (inbox/processed-month/failed). */
@@ -82,6 +85,9 @@ export interface Paths {
   stateDir: string;
   // Active-recording state (one JSON; may track >1 capture process — see recorder.ts).
   recordingState: string;
+  // Meeting auto-detection flag (mur003): "a meeting is live and unrecorded" — written by the
+  // daemon's meeting watcher, read by SwiftBar/status, cleared on mic-off / record / stop.
+  meetingFile: string;
   // Daemon state files.
   queueFile: string;
   pauseFile: string;
@@ -117,6 +123,7 @@ export function buildPaths(base: string): Paths {
     logsDir,
     stateDir,
     recordingState: join(stateDir, "recording.json"),
+    meetingFile: join(stateDir, "meeting.json"),
     queueFile: join(stateDir, "queue.json"),
     pauseFile: join(stateDir, "pause.json"),
     currentFile: join(stateDir, "current.json"),

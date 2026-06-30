@@ -751,6 +751,7 @@ func printUsage() {
         ownscribe-audio capture --output FILE [--mic] [--mic-device NAME] [--silence-timeout N] [--max-duration N]
         ownscribe-audio list-apps
         ownscribe-audio list-devices
+        ownscribe-audio watch-mic
 
     OPTIONS:
         --output, -o FILE    Output WAV file path (required for capture)
@@ -766,6 +767,7 @@ func printUsage() {
         list-apps            Show running applications
         list-devices         Show available audio input devices
         request-mic          Trigger the microphone permission prompt, then exit
+        watch-mic            Emit `mic on <bundleids>` / `mic off` as the mic goes live (permission-free)
 
     """, stderr)
 }
@@ -828,6 +830,150 @@ private func reExecDisclaimed() -> Never {
     exit((status & 0x7f) == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f))
 }
 
+// MARK: - Watch mic (LOCAL PATCH vs upstream — see capture/README.md)
+//
+// Permission-free meeting detection for the murmur daemon. Observes
+// `kAudioDevicePropertyDeviceIsRunningSomewhere` on the default input device — true whenever ANY
+// process opens the mic — and, on a rising edge, attributes the owner(s) via the macOS 14.4+
+// process-object API (`kAudioHardwarePropertyProcessObjectList` + `kAudioProcessPropertyIsRunningInput`
+// + `kAudioProcessPropertyBundleID`). Prints `mic on <bundleid,bundleid,…>` / `mic off` to stdout
+// (line-buffered). It only READS run-state — it never creates a process tap — so it needs NO
+// Microphone/audio-capture TCC grant and lights no mic indicator; hence `watch-mic` is deliberately
+// NOT in the self-disclaim list. Consumed by src/meetwatch.ts. There is deliberately NO listener on
+// `kAudioProcessPropertyIsRunningInput` (those callbacks are unreliable on macOS): the device-level
+// running-state edge is the wake-up, and the process list is read synchronously on that edge.
+
+/// The system's current default input device, or kAudioObjectUnknown if none.
+private func currentDefaultInputDevice() -> AudioDeviceID {
+    var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var dev = AudioDeviceID(kAudioObjectUnknown)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev)
+    return err == noErr ? dev : AudioDeviceID(kAudioObjectUnknown)
+}
+
+/// Whether `device` currently has input IO running anywhere on the system (any process).
+private func deviceIsRunningSomewhere(_ device: AudioDeviceID) -> Bool {
+    guard device != AudioObjectID(kAudioObjectUnknown) else { return false }
+    var addr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var running: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    let err = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &running)
+    return err == noErr && running != 0
+}
+
+/// Bundle ids of the processes that currently hold mic INPUT, via the macOS 14.4+ process-object
+/// API. Reads only (no tap) → permission-free. Returns [] if the API is unavailable (older macOS)
+/// or nothing qualifies, so the daemon fails closed (no nudge) rather than guessing.
+private func micOwnerBundleIDs() -> [String] {
+    var listAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyProcessObjectList,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    var dataSize: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &listAddr, 0, nil, &dataSize) == noErr,
+          dataSize > 0 else { return [] }
+    let count = Int(dataSize) / MemoryLayout<AudioObjectID>.size
+    var procs = [AudioObjectID](repeating: AudioObjectID(kAudioObjectUnknown), count: count)
+    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &listAddr, 0, nil, &dataSize, &procs) == noErr else { return [] }
+
+    var owners = Set<String>()
+    for proc in procs where proc != AudioObjectID(kAudioObjectUnknown) {
+        // Does this process have active input IO right now?
+        var inAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyIsRunningInput,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var running: UInt32 = 0
+        var rsize = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(proc, &inAddr, 0, nil, &rsize, &running) == noErr, running != 0 else { continue }
+        // Read its bundle id (mirrors the CFString read in listInputDevices()).
+        var bidAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioProcessPropertyBundleID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var bidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        var cfRef: Unmanaged<CFString>?
+        guard AudioObjectGetPropertyData(proc, &bidAddr, 0, nil, &bidSize, &cfRef) == noErr,
+              let bundle = cfRef?.takeRetainedValue() as String?, !bundle.isEmpty else { continue }
+        owners.insert(bundle)
+    }
+    return owners.sorted()
+}
+
+/// Long-lived watcher: emit a line on every mic on/off transition until SIGINT/SIGTERM.
+func watchMic() {
+    setvbuf(stdout, nil, _IOLBF, 0) // line-buffered so the daemon reads edges promptly across the pipe
+
+    let queue = DispatchQueue(label: "murmur.watch-mic") // serialize all state + emits (no data races)
+    var lastOn = false
+    var currentDevice = currentDefaultInputDevice()
+
+    var runningAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+
+    func emit() {
+        let on = deviceIsRunningSomewhere(currentDevice)
+        if on == lastOn { return }
+        lastOn = on
+        if on {
+            var owners = micOwnerBundleIDs()
+            if owners.isEmpty { owners = micOwnerBundleIDs() } // momentary race: process may not be listed yet
+            print("mic on \(owners.joined(separator: ","))")
+        } else {
+            print("mic off")
+        }
+        fflush(stdout)
+    }
+
+    // Running-state listener, retargetable when the default input device changes (hot-swap).
+    let runningBlock: AudioObjectPropertyListenerBlock = { _, _ in emit() }
+    func addRunningListener(_ dev: AudioDeviceID) {
+        guard dev != AudioObjectID(kAudioObjectUnknown) else { return }
+        AudioObjectAddPropertyListenerBlock(dev, &runningAddr, queue, runningBlock)
+    }
+    func removeRunningListener(_ dev: AudioDeviceID) {
+        guard dev != AudioObjectID(kAudioObjectUnknown) else { return }
+        AudioObjectRemovePropertyListenerBlock(dev, &runningAddr, queue, runningBlock)
+    }
+    addRunningListener(currentDevice)
+
+    var defAddr = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+    AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &defAddr, queue) { _, _ in
+        let newDev = currentDefaultInputDevice()
+        guard newDev != currentDevice else { return }
+        removeRunningListener(currentDevice)
+        currentDevice = newDev
+        addRunningListener(currentDevice)
+        emit() // run-state may differ on the new device
+    }
+
+    // Clean exit on stop signals (the daemon SIGTERMs us on shutdown). Sources are retained on the
+    // never-returning stack frame of watchMic() (CFRunLoopRun blocks).
+    var signalSources: [DispatchSourceSignal] = []
+    for sig in [SIGINT, SIGTERM] {
+        signal(sig, SIG_IGN)
+        let src = DispatchSource.makeSignalSource(signal: sig, queue: queue)
+        src.setEventHandler { exit(0) }
+        src.resume()
+        signalSources.append(src)
+    }
+
+    queue.async { emit() } // emit initial state — the mic may already be live when we start
+    withExtendedLifetime(signalSources) { CFRunLoopRun() }
+}
+
 func main() {
     let args = CommandLine.arguments
     guard args.count >= 2 else {
@@ -850,6 +996,12 @@ func main() {
 
     case "list-devices":
         listInputDevices()
+
+    case "watch-mic":
+        // [LOCAL PATCH vs upstream — see capture/README.md] Permission-free meeting detection: emit
+        // `mic on <bundleids>` / `mic off` as the mic goes live. Reads only (no tap), so unlike
+        // `capture`/`request-mic` it needs no self-disclaim and no TCC grant.
+        watchMic()
 
     case "capture":
         // Initialize NSApplication so the picker GUI can render

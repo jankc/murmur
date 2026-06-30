@@ -79,7 +79,36 @@ export async function runChecks(cfg: Config): Promise<Check[]> {
   const tn = Bun.which("terminal-notifier", { PATH: cfg.childPath });
   add("terminal-notifier", !!tn, tn ?? "not installed — notifications are silently skipped", "warn");
 
+  // Meeting auto-detection (mur003): only relevant when opted in. Always warn-level — detection is
+  // optional and must never block the pipeline. It needs the ownscribe helper's `watch-mic`.
+  if (cfg.autorecord.mode !== "off") {
+    if (cfg.recordBackend !== "ownscribe") {
+      add("meeting detection", false, `autorecord.mode=${cfg.autorecord.mode} needs the ownscribe backend (current: ${cfg.recordBackend})`, "warn");
+    } else if (!(await fileOk(cfg.ownscribeBin))) {
+      add("meeting detection", false, `ownscribe-audio not found at ${cfg.ownscribeBin} — build it (README → Recording backends)`, "warn");
+    } else {
+      const hasWatch = await helperHasWatchMic(cfg.ownscribeBin, cfg.childPath);
+      add("meeting detection", hasWatch,
+        hasWatch ? `on (mode=${cfg.autorecord.mode}; allow: ${cfg.autorecord.apps.join(", ") || "(none)"})`
+                 : "installed ownscribe-audio lacks `watch-mic` — rebuild the helper (bash capture/build.sh)",
+        "warn");
+    }
+  }
+
   return checks;
+}
+
+/** Cheap probe: does the installed ownscribe-audio advertise the `watch-mic` subcommand? Reads its
+ *  --help (printed to stderr); false on any error so the caller just warns. */
+async function helperHasWatchMic(bin: string, childPath: string): Promise<boolean> {
+  try {
+    const p = Bun.spawn([bin, "--help"], { env: { ...process.env, PATH: childPath }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const out = (await new Response(p.stdout).text()) + (await new Response(p.stderr).text());
+    await p.exited;
+    return /\bwatch-mic\b/.test(out);
+  } catch {
+    return false;
+  }
 }
 
 /** True if the Mach-O has a STABLE (certificate-based) designated requirement, so its TCC grants

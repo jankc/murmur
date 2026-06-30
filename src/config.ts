@@ -38,6 +38,17 @@ export interface Config {
   panFilter: string; // ffmpeg backend: filter that downmixes the Aggregate Device to mono
   silenceDb: number; // warn after stop if a track's peak dBFS is at/below this
 
+  // Meeting auto-detection (mur003): the daemon watches the mic going live (via the ownscribe
+  // helper's `watch-mic`) and nudges a one-click recording when the app holding the mic is a known
+  // meeting app. Opt-in — `mode: "off"` disables it entirely (the default).
+  autorecord: {
+    mode: "off" | "notify"; // off = no detection; notify = detect + one-click nudge
+    apps: string[]; // allowlist of meeting-app bundle ids that qualify a mic-on edge as a meeting
+    ignoreApps: string[]; // denylist of bundle ids that must never nudge (e.g. dictation tools)
+    debounceSeconds: number; // confirm the mic is still live this long before nudging
+    cooldownSeconds: number; // suppress nudges for this long after a recording stops
+  };
+
   // PATH handed to spawned children so ffmpeg/python/ollama/terminal-notifier resolve.
   childPath: string;
 }
@@ -69,7 +80,16 @@ const KEYS = [
   "RECORD_SILENCE_DB",
   "OBSIDIAN_VAULT",
   "VAULT_FOLDER",
+  "AUTORECORD_MODE",
+  "AUTORECORD_APPS",
+  "AUTORECORD_IGNORE_APPS",
+  "AUTORECORD_DEBOUNCE_SECONDS",
+  "AUTORECORD_COOLDOWN_SECONDS",
 ] as const;
+
+// Default meeting-app allowlist (bundle ids): Microsoft Teams, Slack, Zoom. Editable via
+// [autorecord].apps. Matched against the bundle id of whatever process actually holds the mic.
+const DEFAULT_AUTORECORD_APPS = ["com.microsoft.teams2", "com.tinyspeck.slackmacgap", "us.zoom.xos"];
 
 // Downmix the 3-channel Aggregate Device to mono for transcription. Channel layout (from
 // Audio MIDI Setup): c0+c1 = BlackHole 2ch (system audio — the other participants), c2 =
@@ -94,8 +114,11 @@ function tomlToRawEnv(toml: Record<string, any>): RawEnv {
   const summary = (toml.summary ?? {}) as Record<string, any>;
   const vault = (toml.vault ?? {}) as Record<string, any>;
   const rec = (toml.recording ?? {}) as Record<string, any>;
+  const auto = (toml.autorecord ?? {}) as Record<string, any>;
   const path = (v: unknown) => (typeof v === "string" ? expandHome(v) : v);
   const bool = (v: unknown) => (typeof v === "boolean" ? (v ? "1" : "0") : v);
+  // A TOML array → the comma-joined string the flat env layer carries (bundle ids contain no commas).
+  const list = (v: unknown) => (Array.isArray(v) ? v.join(",") : v);
   const mapping: Record<(typeof KEYS)[number], unknown> = {
     MEETINGS_BASE: path(toml.meetings_base),
     MODEL_SUMMARY: summary.model,
@@ -119,6 +142,11 @@ function tomlToRawEnv(toml: Record<string, any>): RawEnv {
     RECORD_SILENCE_DB: rec.silence_db,
     OBSIDIAN_VAULT: path(vault.root),
     VAULT_FOLDER: vault.folder,
+    AUTORECORD_MODE: auto.mode,
+    AUTORECORD_APPS: list(auto.apps),
+    AUTORECORD_IGNORE_APPS: list(auto.ignore_apps),
+    AUTORECORD_DEBOUNCE_SECONDS: auto.debounce_seconds,
+    AUTORECORD_COOLDOWN_SECONDS: auto.cooldown_seconds,
   };
   const raw: RawEnv = {};
   for (const k of KEYS) {
@@ -153,6 +181,9 @@ export function loadConfig(repoDir: string = REPO_DIR): Config {
   const tomlRaw: RawEnv = parsedToml ? tomlToRawEnv(parsedToml) : {};
   const pick = (key: (typeof KEYS)[number], fallback: string): string =>
     process.env[key] ?? tomlRaw[key] ?? fallback;
+  // Split a comma-delimited list (the flat-env encoding of a TOML array), trimming and dropping
+  // empties — so "a, b," → ["a","b"]. Used for the [autorecord] app allow/ignore lists.
+  const parseList = (raw: string): string[] => raw.split(",").map((s) => s.trim()).filter(Boolean);
 
   const home = process.env.HOME ?? "";
   const meetingsBase = pick("MEETINGS_BASE", join(home, "Recordings/Meetings"));
@@ -190,6 +221,13 @@ export function loadConfig(repoDir: string = REPO_DIR): Config {
     processTimeoutSeconds: num("PROCESS_TIMEOUT_SECONDS", 7200),
     panFilter: pick("RECORD_PAN_FILTER", DEFAULT_PAN_FILTER),
     silenceDb: num("RECORD_SILENCE_DB", -80),
+    autorecord: {
+      mode: pick("AUTORECORD_MODE", "off") === "notify" ? "notify" : "off",
+      apps: parseList(pick("AUTORECORD_APPS", DEFAULT_AUTORECORD_APPS.join(","))),
+      ignoreApps: parseList(pick("AUTORECORD_IGNORE_APPS", "")),
+      debounceSeconds: num("AUTORECORD_DEBOUNCE_SECONDS", 4),
+      cooldownSeconds: num("AUTORECORD_COOLDOWN_SECONDS", 30),
+    },
     childPath: buildChildPath(pythonBin),
   };
 
@@ -226,6 +264,11 @@ export function configAsEnv(cfg: Config): Record<string, string> {
     RECORD_SILENCE_DB: String(cfg.silenceDb),
     OBSIDIAN_VAULT: cfg.vaultRoot,
     VAULT_FOLDER: cfg.vaultFolder,
+    AUTORECORD_MODE: cfg.autorecord.mode,
+    AUTORECORD_APPS: cfg.autorecord.apps.join(","),
+    AUTORECORD_IGNORE_APPS: cfg.autorecord.ignoreApps.join(","),
+    AUTORECORD_DEBOUNCE_SECONDS: String(cfg.autorecord.debounceSeconds),
+    AUTORECORD_COOLDOWN_SECONDS: String(cfg.autorecord.cooldownSeconds),
   };
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(all)) if (v !== "") out[k] = v;

@@ -5,7 +5,8 @@ import type { Worker } from "./worker.ts";
 import { Queue } from "./queue.ts";
 import { resolveWav } from "./recordings.ts";
 import type { Recorder } from "./recorder.ts";
-import type { PauseStore } from "./jobstate.ts";
+import { type PauseStore, clearMeetingDetected } from "./jobstate.ts";
+import type { MeetingWatcher } from "./meetwatch.ts";
 import { statusSnapshot } from "./status.ts";
 import { log } from "./log.ts";
 
@@ -15,6 +16,7 @@ interface Deps {
   queue: Queue;
   recorder: Recorder;
   pause: PauseStore;
+  meetwatch?: MeetingWatcher | null; // present only when meeting auto-detection is enabled
 }
 
 const json = (body: unknown, status = 200) =>
@@ -29,7 +31,7 @@ async function safeJson(req: Request): Promise<Record<string, unknown>> {
 }
 
 export function startControl(deps: Deps): ReturnType<typeof Bun.serve> {
-  const { cfg, worker, queue, recorder, pause } = deps;
+  const { cfg, worker, queue, recorder, pause, meetwatch } = deps;
 
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -55,11 +57,18 @@ export function startControl(deps: Deps): ReturnType<typeof Bun.serve> {
         }
         case "POST /record/start": {
           const r = await recorder.start();
+          // A recording is starting (often FROM the meeting nudge) — clear the detected-meeting flag
+          // so the menubar drops its "Start recording" affordance.
+          void clearMeetingDetected(cfg).catch(() => {});
           worker.notifyChange();
           return json(r, r.ok ? 200 : 409);
         }
         case "POST /record/stop": {
           const r = await recorder.stop();
+          // Clear the flag and start the post-stop cooldown so the watcher doesn't immediately
+          // re-nudge while the mic lingers.
+          void clearMeetingDetected(cfg).catch(() => {});
+          meetwatch?.markRecordingStopped();
           worker.notifyChange();
           return json(r, r.ok ? 200 : 409);
         }

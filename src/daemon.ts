@@ -9,6 +9,7 @@ import { MeetingRecorder } from "./recorder.ts";
 import { Worker } from "./worker.ts";
 import { startControl } from "./control.ts";
 import { startWatcher } from "./watcher.ts";
+import { MeetingWatcher } from "./meetwatch.ts";
 import { runChecks } from "./health.ts";
 import { log } from "./log.ts";
 
@@ -40,7 +41,16 @@ export async function runDaemon(cfg: Config): Promise<void> {
   const recorder = new MeetingRecorder(cfg);
   const worker = new Worker(cfg, queue, recorder, pause);
 
-  const server = startControl({ cfg, worker, queue, recorder, pause });
+  // Meeting auto-detection (mur003): opt-in, ownscribe-only. The watcher nudges a one-click
+  // recording when a meeting app opens the mic; the doctor/self-check warns if enabled but unusable.
+  let meetwatch: MeetingWatcher | null = null;
+  if (cfg.autorecord.mode !== "off") {
+    if (cfg.recordBackend === "ownscribe") meetwatch = new MeetingWatcher(cfg, recorder);
+    else log.warn("daemon", `autorecord.mode=${cfg.autorecord.mode} needs the ownscribe backend (got ${cfg.recordBackend}) — meeting detection disabled`);
+  }
+
+  const server = startControl({ cfg, worker, queue, recorder, pause, meetwatch });
+  meetwatch?.start();
   const watcher = startWatcher(cfg, (wav) => {
     // Fire-and-forget, but never let an enqueue error become an unhandled rejection
     // (which would crash the daemon) — log it and carry on.
@@ -66,6 +76,7 @@ export async function runDaemon(cfg: Config): Promise<void> {
     shuttingDown = true;
     log.info("daemon", `${sig} received — shutting down`);
     clearInterval(finalizeTimer);
+    meetwatch?.stop();
     worker.shutdown();
     watcher.close();
     server.stop(true);

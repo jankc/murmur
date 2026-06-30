@@ -67,6 +67,23 @@ model = "gemma3:12b"               # any Ollama chat model. NOTE: *-mlx tags (e.
 # Aggregate Device orders its sub-devices differently (a wrong map = mute/lopsided capture).
 # pan_filter = "pan=mono|c0=0.35*c0+0.35*c1+0.7*c2,alimiter"
 
+[autorecord]
+# Meeting auto-detection — OFF by default. When on, the daemon watches the mic going live and, when
+# the app HOLDING the mic is a known meeting app, posts a notification you click to start recording
+# (ignore it and nothing happens). Requires the ownscribe backend + macOS 14.4+; rebuild the helper
+# (bash capture/build.sh && cp capture/bin/ownscribe-audio ~/.local/bin/) then `murmur daemon restart`.
+# Tip: set terminal-notifier to "Alerts" (System Settings ▸ Notifications) so the prompt persists.
+# mode = "off"                       # off | notify
+# apps = ["com.microsoft.teams2", "com.tinyspeck.slackmacgap", "us.zoom.xos"]   # meeting allowlist
+                                     # (bundle ids; prefix-matched, so each also covers that app's
+                                     # mic helper, e.g. com.microsoft.teams2.modulehost)
+# ignore_apps = []                   # never nudge for these bundle ids (e.g. dictation tools).
+                                     # Non-listed apps are already ignored; this is a hard veto.
+                                     # Find an app's id from `ownscribe-audio watch-mic` output
+                                     # (e.g. start a VoiceInk dictation and read `mic on <id>`).
+# debounce_seconds = 4               # mic must stay live this long before nudging (ignores blips)
+# cooldown_seconds = 30              # suppress nudges for this long after a recording stops
+
 # External recording sources for `murmur import`. Each [[sources]] is a
 # generic "folder" adapter: root + glob + a 6-group (Y M D H Mi S) timestamp regex over the file's
 # path-relative-to-root + storage ("icloud" materialises evicted files first, "none" = plain

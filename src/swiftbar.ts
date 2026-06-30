@@ -9,6 +9,7 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
   const recording = s.recording;
   const paused = s.pause !== "none";
   const depth = s.queueDepth;
+  const meetingActive = !recording && !!s.meeting; // a detected meeting we're not yet recording
 
   // SwiftBar runs `bash=<bin>` with paramN as argv; values must contain no spaces.
   const action = (label: string, ...cmd: string[]): string => {
@@ -17,6 +18,8 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
   };
 
   const symbol = recording
+    ? "waveform.circle.fill"
+    : meetingActive
     ? "waveform.circle.fill"
     : paused
     ? "pause.circle.fill"
@@ -34,6 +37,8 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
     ` sfconfig=${Buffer.from(JSON.stringify({ renderingMode: "Palette", colors: [subject, ring] })).toString("base64")}`;
   const tint = recording
     ? sfconfig(neutral, "#FF3B30")
+    : meetingActive
+    ? sfconfig(neutral, "#34C759") // green ring: a meeting is live — click to record
     : s.failedCount > 0
     ? sfconfig(neutral, "#FFD60A")
     : "";
@@ -43,6 +48,10 @@ export async function renderSwiftBar(cfg: Config, bun: string, cli: string): Pro
   if (recording) {
     if (s.recordingFile) lines.push(`Recording: ${s.recordingFile.split("/").pop()} | color=red`);
     lines.push(action("Stop recording", "stop"));
+  } else if (meetingActive) {
+    // A meeting app holds the mic and we're idle — offer a one-click record (mirrors the nudge).
+    lines.push(`Meeting detected${s.meeting?.app ? ` · ${s.meeting.app}` : ""} | color=green`);
+    lines.push(action("● Record this meeting", "record"));
   } else {
     lines.push(action("Start recording", "record"));
   }

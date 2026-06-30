@@ -87,6 +87,8 @@ murmur logs [-f]             # tail the daemon logs (-f to follow)
 murmur daemon <sub>          # run | start | stop | restart | install — manage the LaunchAgent
 ```
 
+**Add context for a better summary.** `record`, `process`, `reprocess`, `transcribe`, and `summarize` accept `--context`/`-c` to attach free-form notes the transcript can't convey — who each `SPEAKER_NN` is, the meeting topic, project acronyms. One flag, three input methods by value: `--context "SPEAKER_00 = Petr; téma: AI governance"` (inline), `--context @notes.md` (read a file), or `--context -` (read stdin until EOF; on a terminal it prompts so you can type it, then Ctrl-D). The text is stored **per recording** as `<base>/context.md`, so a later `summarize`/`reprocess` reuses it with no flag (re-supplying `--context` replaces it), and it's injected **into the summary prompt only** — never into transcription or the triage that picks the summary type/language.
+
 Each recording's outputs land inside its own folder (`<base>/transcript.txt`, `<base>/summary.md`) alongside the audio, wherever that folder currently sits in the lifecycle. Stateful commands (`record`/`stop`/`process`/`pause`/`resume`/`status`) use the daemon when it's running, and act directly when it isn't; `transcribe`/`summarize` always run inline. A recording's **location is its state** — processing always runs and overwrites prior outputs, so **to reprocess a recording run `murmur reprocess <name>`** (it resolves the recording wherever it sits — `inbox/`, `failed/`, or `processed/`); `murmur retry-failed` re-runs everything in `recordings/failed/`.
 
 ## The daemon (automatic processing)
@@ -101,6 +103,35 @@ murmur daemon stop           # ( / start )
 murmur logs -f               # tail the daemon logs (out + err)
 ```
 `murmur daemon restart` re-reads an edited plist (`kickstart` alone wouldn't). The daemon's log location is derived from `MEETINGS_BASE` by `launchd/run-daemon.sh` (via `murmur print-env`), so relocating the base needs only a `murmur.toml` edit + `murmur daemon restart`. The plist still hard-codes machine-specific paths — the `bun` mise install in `PATH`, the repo's `run-daemon.sh`, and the `WorkingDirectory` — so **on a new machine (or a different username/repo location) edit those**, and update the `bun` path whenever you reinstall bun.
+
+## Meeting auto-detection (one-click record)
+
+Keep forgetting to hit record when a Teams/Slack call starts? Turn on `[autorecord]` and the daemon watches the microphone going live and, when the app **holding the mic** is one of your meeting apps, posts a notification — **"Mic is live — record this meeting?"** — that you **click to start recording** (ignore it and nothing happens). The SwiftBar icon also turns green with a **"● Record this meeting"** item while a meeting is detected and you're idle.
+
+```toml
+[autorecord]
+mode = "notify"             # off (default) | notify
+# apps = ["com.microsoft.teams2", "com.tinyspeck.slackmacgap", "us.zoom.xos"]   # meeting allowlist (bundle ids)
+# ignore_apps = []          # bundle ids to never nudge for (e.g. dictation tools) — a hard veto
+# debounce_seconds = 4      # mic must stay live this long before nudging (filters dings/blips)
+# cooldown_seconds = 30     # no nudge for this long after a recording stops
+```
+
+How it works (and why it's precise): the ownscribe helper's `watch-mic` subcommand observes a **permission-free** CoreAudio signal (`kAudioDevicePropertyDeviceIsRunningSomewhere` — no Microphone grant, no prompt) and, on a rising edge, reads **which app holds the mic** by bundle id (the macOS 14.4+ process-object API — reads only, never a tap). murmur nudges only when a mic owner is in `apps` and none is in `ignore_apps`. Matching is **prefix-aware**, so an app's audio helper counts too — `com.microsoft.teams2` also matches Teams' `com.microsoft.teams2.modulehost` (the helper that actually opens the mic during a call), and likewise for Slack/Zoom helpers. Because it matches the **mic owner** — not "is some meeting app running" — dictation tools like VoiceInk are ignored even with Teams/Slack idling in the background. Guards prevent spam: a debounce, no nudge while already recording, and a post-stop cooldown; you're nudged at most once per call.
+
+**Enable it:**
+1. Build/refresh the helper so it has `watch-mic`: `bash capture/build.sh && cp capture/bin/ownscribe-audio ~/.local/bin/`
+2. Set `[autorecord].mode = "notify"` in `murmur.toml`, then `murmur daemon restart`.
+3. Recommended: set **terminal-notifier to "Alerts"** (System Settings ▸ Notifications) so the prompt persists instead of auto-dismissing.
+
+`murmur doctor` reports detection status (and warns, never errors, if it's enabled but the backend isn't `ownscribe` or the helper predates `watch-mic`).
+
+**Ignoring an app:** non-listed apps are already ignored, but to hard-veto one (a dictation tool, say), add its bundle id to `ignore_apps`. Find an app's bundle id by watching its mic use directly:
+```sh
+ownscribe-audio watch-mic        # then start a VoiceInk dictation; read the `mic on <bundle-id>` line
+```
+
+**Requirements & caveats:** needs the **ownscribe** backend and **macOS 14.4+** (you're past that). Detection runs only while the daemon is running. Known gap: the underlying signal can under-report for some **Bluetooth mics** (e.g. AirPods), so a call taken entirely on AirPods may not be detected — recording on the built-in mic/speakers is unaffected.
 
 ## The import scheduler (periodic `murmur import`)
 
@@ -131,7 +162,7 @@ The CLI and SwiftBar talk to this; you can too. Mutating routes (everything but 
 ```sh
 ln -s "$PWD/swiftbar/murmur.5s.sh" "$HOME/Library/Application Support/SwiftBar/Plugins/murmur.5s.sh"
 ```
-(If a stale `murmur.5s.sh` dir/file is already there, `rm -rf` it first.) Shows `🔴` recording / `⚪` idle / `⏸` paused plus the queue depth, with menu actions (start/stop recording, pause/resume). The plugin just calls `murmur swiftbar`, which renders from on-disk state and **works whether or not the daemon is running** — so it reflects a `murmur record` you started directly. Menu clicks run `murmur` too, so they also work in both modes.
+(If a stale `murmur.5s.sh` dir/file is already there, `rm -rf` it first.) Shows `🔴` recording / `⚪` idle / `⏸` paused plus the queue depth, with menu actions (start/stop recording, pause/resume). When [meeting auto-detection](#meeting-auto-detection-one-click-record) is on, a detected-but-unrecorded meeting turns the icon **green** with a one-click **"● Record this meeting"** item (mirroring the notification). The plugin just calls `murmur swiftbar`, which renders from on-disk state and **works whether or not the daemon is running** — so it reflects a `murmur record` you started directly. Menu clicks run `murmur` too, so they also work in both modes.
 
 ## Recording backends
 
