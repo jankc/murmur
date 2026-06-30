@@ -8,6 +8,7 @@ import { readdirSync, statSync, existsSync, readFileSync, writeFileSync, mkdirSy
 import { userInfo } from "node:os";
 import { loadConfig, configAsEnv, type Config } from "./config.ts";
 import { artifactsFor, isRecordingFile } from "./paths.ts";
+import { resolveContext, saveContext } from "./context.ts";
 import { runDaemon } from "./daemon.ts";
 import { MeetingRecorder } from "./recorder.ts";
 import { transcribe } from "./engines/asr.ts";
@@ -53,8 +54,26 @@ function flag(name: string): string | undefined {
   const i = rest.indexOf(name);
   return i >= 0 ? rest[i + 1] : undefined;
 }
+// Flags that consume the following arg as their value. positional() must skip both the flag and
+// its value, else a value that doesn't start with "-" (e.g. `--context "SPEAKER_00 = Petr"`) would
+// be mistaken for the positional argument.
+const VALUE_FLAGS = new Set(["--context", "-c", "--device", "-d"]);
 function positional(): string | undefined {
-  return rest.find((a) => !a.startsWith("-"));
+  let skipNext = false; // true right after a value-flag, to skip the value it consumes
+  for (const a of rest) {
+    if (skipNext) { skipNext = false; continue; }
+    if (VALUE_FLAGS.has(a)) { skipNext = true; continue; }
+    if (!a.startsWith("-")) return a; // first real positional
+  }
+  return undefined;
+}
+
+/** Read the `--context`/`-c` flag, resolve it, and persist it to the recording's folder (no-op when
+ *  absent or empty), printing a confirmation on write. Shared by process/reprocess/transcribe/
+ *  summarize. `record` resolves separately (before start(), so `--context -` can prompt first). */
+async function applyContext(folder: string): Promise<void> {
+  const path = await saveContext(folder, await resolveContext(flag("--context") ?? flag("-c")));
+  if (path) console.log(`context saved → ${path}`);
 }
 
 function newestRecording(cfg: Config): string | null {
@@ -264,6 +283,11 @@ Usage: murmur <command> [args]
 
   record [--device N]      start recording (system audio + your mic)
   stop                     stop the current recording
+
+  Add --context/-c "text" (or @file, or - for stdin) to record/process/reprocess/transcribe/
+  summarize to attach notes (who SPEAKER_NN is, the topic, acronyms). Stored per recording as
+  context.md, reused on later re-runs, and injected into the summary only.
+
   grant-mic                trigger the microphone permission prompt for the launching app
                            (ownscribe backend; run it once from the menubar — see README)
   process [audio]          transcribe + summarize (newest, or by path/basename)
@@ -297,11 +321,19 @@ switch (cmd) {
 
   case "record": {
     const dev = flag("--device") ?? flag("-d");
+    // Resolve context BEFORE starting (so `--context -` lets the user type it, then recording begins).
+    const ctx = await resolveContext(flag("--context") ?? flag("-c"));
     const recorder = new MeetingRecorder(dev ? { ...cfg, recordDeviceIndex: dev } : cfg);
     const r = await recorder.start();
     // start() returns the recording's basename — surface it so the caller knows the folder
     // (inbox/<base>/) this capture will publish to.
     console.log(r.base ? `${r.message} [${r.base}]` : r.message);
+    // Persist context into .partial/<base>/; the atomic rename into inbox/ carries it along and the
+    // daemon's later summary picks it up. Only when the capture actually started.
+    if (r.ok && r.base) {
+      const path = await saveContext(join(cfg.paths.partialDir, r.base), ctx);
+      if (path) console.log(`context saved → ${path}`);
+    }
     if (!r.ok) process.exit(1);
     break;
   }
@@ -443,6 +475,7 @@ switch (cmd) {
     const arg = positional();
     const wav = arg ? await resolveWav(cfg, arg) : newestRecording(cfg);
     if (!wav) die(`no recording found${arg ? `: ${arg}` : ""}`);
+    await applyContext(dirname(wav));
     try { await dispatchWav(wav); } catch (e) { die(`processing failed: ${String(e)}`); }
     break;
   }
@@ -490,6 +523,7 @@ switch (cmd) {
     if (!arg) die("usage: murmur reprocess <name|path>");
     const wav = await resolveWav(cfg, arg);
     if (!wav) die(`recording not found: ${arg}`);
+    await applyContext(dirname(wav));
     try { await reprocessInline(wav); } catch (e) { die(`processing failed: ${String(e)}`); }
     break;
   }
@@ -540,6 +574,8 @@ switch (cmd) {
     const arg = positional() ?? newestRecording(cfg) ?? "";
     const wav = (await resolveWav(cfg, arg)) ?? (arg && (await Bun.file(arg).exists()) ? arg : null);
     if (!wav) die(`recording not found: ${arg || "(none)"}`);
+    // transcribe writes no summary, but persist context for a later `summarize`/`reprocess`.
+    await applyContext(dirname(wav));
     const base = recordingBase(cfg, wav);
     const { transcript: txt } = artifactsFor(wav);
     await transcribe(cfg, { basename: base, wavPath: wav, enqueuedAt: 0, attempts: 0 }, new AbortController().signal);
@@ -560,6 +596,7 @@ switch (cmd) {
     }
     if (!txt || !(await Bun.file(txt).exists())) die(`transcript not found: ${arg}`);
     const folder = dirname(txt);
+    await applyContext(folder);
     const sig = new AbortController().signal;
     const result = await summarize(cfg, txt, sig);
     await archiveSummary(cfg, folder, basename(folder), sig, result).catch((e) => console.error(`archive: ${String(e)}`));

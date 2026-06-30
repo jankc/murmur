@@ -91,6 +91,27 @@ async function classify(cfg: Config, transcript: string, signal: AbortSignal, ti
   return parseTriage(response);
 }
 
+// Delimiters wrapping the optional user-context block in the summary prompt. base.md tells the
+// model how to treat this section — keep these markers in sync with that instruction.
+export const CONTEXT_OPEN = "--- KONTEXT OD UŽIVATELE ---";
+export const CONTEXT_CLOSE = "--- KONEC KONTEXTU ---";
+
+/** Pure assembly of the summary prompt: base rules + type template, an optional user-context block
+ *  (included ONLY when non-empty — never empty delimiters), then the transcript. Kept pure (no
+ *  fs/network) so it's unit-testable without Ollama. */
+export function assembleSummaryPrompt(parts: {
+  baseRules: string;
+  typePrompt: string;
+  context: string;
+  transcript: string;
+}): string {
+  const ctx = parts.context.trim();
+  const lines = [parts.baseRules, parts.typePrompt, ""];
+  if (ctx) lines.push(CONTEXT_OPEN, ctx, CONTEXT_CLOSE, "");
+  lines.push("--- TRANSCRIPT ---", parts.transcript, "", "--- END ---", "");
+  return lines.join("\n");
+}
+
 export async function summarize(cfg: Config, transcriptPath: string, signal: AbortSignal): Promise<SummarizeResult> {
   // The transcript lives in the recording's folder (<folder>/transcript.txt); the summary is its
   // sibling and the recording's key is the folder name — not the "transcript" filename.
@@ -127,16 +148,12 @@ export async function summarize(cfg: Config, transcriptPath: string, signal: Abo
 
   const baseRules = (await Bun.file(basePromptPath(cfg)).text())
     .replaceAll("{{LANGUAGE}}", triage.language === "en" ? "anglicky" : "česky");
-  const prompt = [
-    baseRules,
-    await Bun.file(typePromptPath(cfg, triage.type)).text(),
-    "",
-    "--- TRANSCRIPT ---",
-    transcript,
-    "",
-    "--- END ---",
-    "",
-  ].join("\n");
+  const typePrompt = await Bun.file(typePromptPath(cfg, triage.type)).text();
+  // Optional per-recording context (ARTIFACTS.context) — injected into the summary prompt only,
+  // never into triage/transcription. Absent for most recordings (→ "", no context section).
+  const context = (await Bun.file(join(folder, ARTIFACTS.context)).text().catch(() => "")).trim();
+  if (context) log.info("ollama", `applying user context for ${base} (${context.length} chars)`);
+  const prompt = assembleSummaryPrompt({ baseRules, typePrompt, context, transcript });
 
   log.info("ollama", `summarizing ${base} (${triage.type}) with ${cfg.modelSummary}`);
   let res: Response;
